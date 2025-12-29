@@ -73,11 +73,15 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
+let sigintCaught = false;
+
 // --- Interfaces for Data Structures ---
 interface LineBlame {
+    repositoryName: string;
     username: string;
     time: number;
     filePath: string;
+    totalLinesInFile: number;
 }
 
 interface AggregatedStats {
@@ -88,6 +92,7 @@ interface AggregatedStats {
 
 // Kept for CSV output compatibility
 interface BlameRecord {
+    repositoryName: string;
     filePath: string;
     fileName: string;
     username: string;
@@ -98,6 +103,7 @@ interface BlameRecord {
 
 interface CliArgs {
     targetPath: string;
+    additionalRepoPaths: string[];
     outputFormat: 'csv' | 'html';
     htmlOutputFile?: string;
     filenameGlobs?: string[];
@@ -108,19 +114,107 @@ interface CliArgs {
 
 // --- Main Application Logic ---
 
+function isGitRepo(dir: string): boolean {
+    return fs.existsSync(path.join(dir, '.git'));
+}
+
+function getDirectories(source: string): string[] {
+    if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
+        return [];
+    }
+    const ignoredDirs = new Set(['.git', 'node_modules']);
+    try {
+        return fs.readdirSync(source, { withFileTypes: true })
+            .filter(dirent => dirent.isDirectory() && !ignoredDirs.has(dirent.name))
+            .map(dirent => path.join(source, dirent.name));
+    } catch (error) {
+        console.error(`Could not read directory: ${source}`);
+        return [];
+    }
+}
+
 function main() {
+    process.on('SIGINT', () => {
+        if (sigintCaught) {
+            console.error("\nForcing exit.");
+            process.exit(130);
+        }
+        sigintCaught = true;
+        console.error("\nSignal received. Will skip to the next repository after the current operation. Press Ctrl+C again to exit immediately.");
+    });
+
     const args = parseArgs();
-    const { data, repoRoot, originalCwd } = gatherStats(args);
+    const originalCwd = process.cwd();
+    let repoPathsToProcess: string[] = [...args.additionalRepoPaths];
+
+    const targetFullPath = path.resolve(originalCwd, args.targetPath);
+    if (!fs.existsSync(targetFullPath)) {
+        console.error(`Error: Path does not exist: ${targetFullPath}`);
+        process.exit(1);
+    }
+    
+    if (isGitRepo(targetFullPath)) {
+        repoPathsToProcess.push(args.targetPath);
+    } else if (fs.statSync(targetFullPath).isDirectory()) {
+        console.error(`'${args.targetPath}' is not a git repository. Searching for git repositories within (depth=2)...`);
+        const foundRepos: string[] = [];
+        // depth 1
+        const depth1Dirs = getDirectories(targetFullPath);
+        for (const dir of depth1Dirs) {
+            if (isGitRepo(dir)) {
+                foundRepos.push(path.relative(originalCwd, dir));
+            } else {
+                // depth 2
+                const depth2Dirs = getDirectories(dir);
+                for (const subDir of depth2Dirs) {
+                    if (isGitRepo(subDir)) {
+                        foundRepos.push(path.relative(originalCwd, subDir));
+                    }
+                }
+            }
+        }
+        repoPathsToProcess.push(...foundRepos);
+    }
+
+    // Remove duplicates and sort
+    repoPathsToProcess = [...new Set(repoPathsToProcess)].sort();
+
+    if (repoPathsToProcess.length === 0) {
+        console.error("No git repositories found to analyze.");
+        process.exit(0);
+    }
+    
+    console.error(`Found ${repoPathsToProcess.length} repositories to analyze:`);
+    repoPathsToProcess.forEach(p => console.error(`- ${p || '.'}`));
+
+    let allData: LineBlame[] = [];
+
+    for (const p of repoPathsToProcess) {
+        sigintCaught = false; // Reset for each repo
+        console.error(`\nProcessing repository: ${p || '.'}`);
+        const { data, skipped } = gatherStatsForRepo(p || '.', args);
+        if (skipped) {
+            console.error(`\nSkipped repository: ${p || '.'}`);
+            continue;
+        }
+        allData = allData.concat(data);
+    }
+    
+    process.chdir(originalCwd);
+    
+    if (sigintCaught) {
+        console.error("\nAnalysis was interrupted. The results may be incomplete.");
+    }
 
     if (args.outputFormat === 'html') {
-        const aggregatedData = aggregateData(data, args.dayBuckets);
+        const aggregatedData = aggregateData(allData, args.dayBuckets);
         const htmlFile = args.htmlOutputFile || 'git-blame-stats-report.html';
         generateHtmlReport(aggregatedData, htmlFile, originalCwd, args.dayBuckets);
         console.log(`HTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
         // Note: CSV output does not use dynamic day buckets in this version.
-        const records = aggregateForCsv(data);
-        printCsv(records, repoRoot);
+        const records = aggregateForCsv(allData);
+        printCsv(records);
     }
 }
 
@@ -128,34 +222,39 @@ function main() {
  * Aggregates line-level blame info into the legacy per-file record format for CSV output.
  */
 function aggregateForCsv(blameData: LineBlame[]): BlameRecord[] {
-    const fileUserLines = new Map<string, Map<string, number>>();
+    const fileUserLines = new Map<string, {
+        userLines: Map<string, number>,
+        totalLines: number,
+        repoName: string,
+        filePath: string,
+    }>();
+    
+    const getFileId = (filePath: string, repoName: string) => `${repoName}#${filePath}`;
     
     for (const item of blameData) {
-        if (!fileUserLines.has(item.filePath)) {
-            fileUserLines.set(item.filePath, new Map<string, number>());
+        const fileId = getFileId(item.filePath, item.repositoryName);
+        if (!fileUserLines.has(fileId)) {
+            fileUserLines.set(fileId, {
+                userLines: new Map<string, number>(),
+                totalLines: item.totalLinesInFile,
+                repoName: item.repositoryName,
+                filePath: item.filePath,
+            });
         }
-        const userLines = fileUserLines.get(item.filePath)!;
-        userLines.set(item.username, (userLines.get(item.username) || 0) + 1);
+        const fileInfo = fileUserLines.get(fileId)!;
+        fileInfo.userLines.set(item.username, (fileInfo.userLines.get(item.username) || 0) + 1);
     }
 
     const records: BlameRecord[] = [];
-    for (const [filePath, userLines] of fileUserLines.entries()) {
-        // In file granularity, each user should only have one entry per file.
-        // In line granularity, we sum them up. The logic holds for both.
-        let totalLinesInFile = 0;
-        if (fs.existsSync(filePath)) {
-            try {
-                totalLinesInFile = fs.readFileSync(filePath, 'utf-8').split('\n').length;
-            } catch (e) { /* ignore read errors */ }
-        }
-
-        for (const [username, linesForCommitter] of userLines.entries()) {
+    for (const [, fileInfo] of fileUserLines.entries()) {
+        for (const [username, linesForCommitter] of fileInfo.userLines.entries()) {
             records.push({
-                filePath,
-                fileName: path.basename(filePath),
+                repositoryName: fileInfo.repoName,
+                filePath: fileInfo.filePath,
+                fileName: path.basename(fileInfo.filePath),
                 username,
                 linesForCommitter,
-                totalLines: totalLinesInFile
+                totalLines: fileInfo.totalLines
             });
         }
     }
@@ -174,6 +273,7 @@ function parseArgs(): CliArgs {
         outputFormat: 'csv', // Default to CSV
         granularity: 'line', // Default granularity
         dayBuckets: [7, 30, 180, 365, 730, 1825], // Default buckets
+        additionalRepoPaths: [],
     };
     
     for (let i = 0; i < cliArgs.length; i++) {
@@ -215,6 +315,12 @@ function parseArgs(): CliArgs {
                 result.excludeGlobs!.push(nextArg);
                 i++;
             }
+        } else if (arg === '--path') {
+            const nextArg = cliArgs[i + 1];
+            if (nextArg && !nextArg.startsWith('-')) {
+                result.additionalRepoPaths!.push(nextArg);
+                i++;
+            }
         }
         else if (!arg.startsWith('-')) {
             if (!result.targetPath) result.targetPath = arg;
@@ -230,14 +336,16 @@ function parseArgs(): CliArgs {
  * @param args - CLI arguments.
  * @returns An object containing the collected data, repo root, and original CWD.
  */
-function gatherStats(args: CliArgs): { data: LineBlame[], repoRoot: string, originalCwd: string } {
-    const { targetPath, filenameGlobs, excludeGlobs, granularity } = args;
+function gatherStatsForRepo(target: string, args: CliArgs): { data: LineBlame[], repoRoot: string, skipped: boolean } {
+    const { filenameGlobs, excludeGlobs, granularity } = args;
     const originalCwd = process.cwd();
-    const discoveryPath = path.resolve(originalCwd, targetPath);
+    const discoveryPath = path.resolve(originalCwd, target);
+
+    if (sigintCaught) return { data: [], repoRoot: '', skipped: true };
 
     if (!fs.existsSync(discoveryPath)) {
         console.error(`Error: Path does not exist: ${discoveryPath}`);
-        process.exit(1);
+        return { data: [], repoRoot: '', skipped: true }; // Skip this repo
     }
 
     const gitCommandPath = fs.statSync(discoveryPath).isDirectory() ? discoveryPath : path.dirname(discoveryPath);
@@ -245,74 +353,93 @@ function gatherStats(args: CliArgs): { data: LineBlame[], repoRoot: string, orig
     let repoRoot: string;
     try {
         repoRoot = execSync('git rev-parse --show-toplevel', { cwd: gitCommandPath, stdio: 'pipe' }).toString().trim();
-    } catch (e) {
-        console.error(`Error: Could not find a git repository at or above the path: ${gitCommandPath}`);
-        process.exit(1);
+    } catch (e: any) {
+        if (e.signal === 'SIGINT' || sigintCaught) return { data: [], repoRoot: '', skipped: true };
+        console.error(`Error: Could not find a git repository at or above the path: ${gitCommandPath}. Skipping.`);
+        return { data: [], repoRoot: '', skipped: true };
     }
 
+    const repoName = path.basename(repoRoot);
     process.chdir(repoRoot);
 
-    const finalTargetPath = path.relative(repoRoot, discoveryPath);
-    const includePathspecs = (filenameGlobs && filenameGlobs.length > 0)
-        ? filenameGlobs.map(g => `'${g}'`).join(' ')
-        : '';
-    const excludePathspecs = (excludeGlobs && excludeGlobs.length > 0)
-        ? excludeGlobs.map(g => `':!${g}'`).join(' ')
-        : '';
+    try {
+        if (sigintCaught) return { data: [], repoRoot, skipped: true };
 
-    const filesCommand = `git ls-files -- "${finalTargetPath || '.'}" ${includePathspecs} ${excludePathspecs}`;
-    const filesOutput = execSync(filesCommand).toString().trim();
-    const files = filesOutput ? filesOutput.split('\n') : [];
+        const finalTargetPath = path.relative(repoRoot, discoveryPath);
+        const includePathspecs = (filenameGlobs && filenameGlobs.length > 0)
+            ? filenameGlobs.map(g => `'${g}'`).join(' ')
+            : '';
+        const excludePathspecs = (excludeGlobs && excludeGlobs.length > 0)
+            ? excludeGlobs.map(g => `':!${g}'`).join(' ')
+            : '';
 
-    const allData: LineBlame[] = [];
-    const totalFiles = files.length;
-    let processedCount = 0;
-
-    console.error(`Found ${totalFiles} files to analyze with '${granularity}' granularity...`);
-
-    for (const file of files) {
-        processedCount++;
-        const progressMessage = `[${processedCount}/${totalFiles}] Analyzing: ${file}`;
-        process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
-        
-        if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) {
-            continue;
-        }
-
+        let files: string[];
         try {
-            let fileData: LineBlame[] = [];
-            if (granularity === 'line') {
-                fileData = getLineBlameForFile(file);
-            } else if (granularity === 'file') {
-                let blameForFile = getLineBlameForFile(file);
-                let resultMap: {[username: string]: LineBlame} = {}
-                blameForFile.forEach(lineBlame => {
-                    if (!resultMap[lineBlame.username] || resultMap[lineBlame.username].time<lineBlame.time) {
-                        resultMap[lineBlame.username] = lineBlame
-                    }
-                })
-                fileData.push(...Object.values(resultMap));
-            }
-            allData.push(...fileData);
-        } catch (e) {
-            // Silently skip files that error
+            const filesCommand = `git ls-files -- "${finalTargetPath || '.'}" ${includePathspecs} ${excludePathspecs}`;
+            const filesOutput = execSync(filesCommand, { maxBuffer: 1024 * 1024 * 50 }).toString().trim();
+            files = filesOutput ? filesOutput.split('\n') : [];
+        } catch (e: any) {
+            if (e.signal === 'SIGINT' || sigintCaught) return { data: [], repoRoot, skipped: true };
+            throw e;
         }
+
+        const allData: LineBlame[] = [];
+        const totalFiles = files.length;
+        let processedCount = 0;
+
+        console.error(`Found ${totalFiles} files to analyze in '${repoName}' with '${granularity}' granularity...`);
+
+        for (const file of files) {
+            if (sigintCaught) return { data: [], repoRoot, skipped: true };
+
+            processedCount++;
+            const progressMessage = `[${processedCount}/${totalFiles}] Analyzing: ${file}`;
+            process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
+            
+            if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) {
+                continue;
+            }
+
+            try {
+                let fileData: LineBlame[] = [];
+                if (granularity === 'line') {
+                    fileData = getLineBlameForFile(file, repoName);
+                } else if (granularity === 'file') {
+                    let blameForFile = getLineBlameForFile(file, repoName);
+                    let resultMap: {[username: string]: LineBlame} = {}
+                    blameForFile.forEach(lineBlame => {
+                        if (!resultMap[lineBlame.username] || resultMap[lineBlame.username].time<lineBlame.time) {
+                            resultMap[lineBlame.username] = lineBlame
+                        }
+                    })
+                    fileData.push(...Object.values(resultMap));
+                }
+                allData.push(...fileData);
+            } catch (e: any) {
+                if (e.signal === 'SIGINT' || sigintCaught) return { data: [], repoRoot, skipped: true };
+                // Silently skip files that error
+            }
+        }
+
+        process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
+        console.error(`Analysis complete for '${repoName}'. Processed ${totalFiles} files.`);
+        
+        return { data: allData, repoRoot, skipped: false };
+
+    } finally {
+        process.chdir(originalCwd);
     }
-
-    process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
-    console.error(`Analysis complete. Processed ${totalFiles} files.`);
-
-    return { data: allData, repoRoot, originalCwd };
 }
 
 /**
  * Gets blame information for every line in a file.
  */
-function getLineBlameForFile(file: string): LineBlame[] {
+function getLineBlameForFile(file: string, repoName: string): LineBlame[] {
     const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { maxBuffer: 1024 * 1024 * 50 }).toString();
     const blameLines = blameOutput.trim().split('\n');
     const lineInfos: { username: string; time: number }[] = [];
     let currentInfo: Partial<{ username: string; time: number }> = {};
+    const totalLinesInFile = fs.readFileSync(file, 'utf-8').split('\n').length;
 
     for (const line of blameLines) {
         if (/^[0-9a-f]{40}/.test(line)) {
@@ -330,7 +457,7 @@ function getLineBlameForFile(file: string): LineBlame[] {
         lineInfos.push(currentInfo as { username: string; time: number });
     }
     
-    return lineInfos.map(info => ({ ...info, filePath: file }));
+    return lineInfos.map(info => ({ ...info, filePath: file, repositoryName: repoName, totalLinesInFile }));
 }
 
 // --- Output Generation ---
@@ -379,11 +506,10 @@ function aggregateData(blameData: LineBlame[], dayBuckets: number[]): Aggregated
 /**
  * Prints the collected data in CSV format to the console.
  */
-function printCsv(records: BlameRecord[], repoRoot: string) {
+function printCsv(records: BlameRecord[]) {
     console.log('repository_name,file_path,file_name,username,lines_for_committer,total_lines');
-    const repoName = path.basename(repoRoot);
     for (const record of records) {
-        console.log(`${repoName},"${record.filePath}","${record.fileName}",${record.username},${record.linesForCommitter},${record.totalLines}`);
+        console.log(`${record.repositoryName},"${record.filePath}","${record.fileName}",${record.username},${record.linesForCommitter},${record.totalLines}`);
     }
 }
 
