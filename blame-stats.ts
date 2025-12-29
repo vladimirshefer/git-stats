@@ -1,4 +1,61 @@
 #!/usr/bin/env node
+/**
+ * Git Blame Statistics Analyzer
+ *
+ * This script analyzes a Git repository's blame information to generate statistics
+ * on code authorship. It can process a specific directory or file within a repo
+ * and output the results in either CSV format to the console or as a self-contained
+ * HTML report.
+ *
+ * --- CLI Usage ---
+ *
+ * To run the script, use the following command structure from your terminal:
+ *
+ *   npx ts-node blame-stats.ts [path] [--html [output_filename]]
+ *
+ *   or if compiled to javascript
+ *
+ *   node blame-stats.js [path] [--html [output_filename]]
+ *
+ *
+ * Parameters:
+ *
+ *   [path] (optional)
+ *     - The relative or absolute path to the directory or file you want to analyze.
+ *     - If omitted, it defaults to the current directory (`.`).
+ *
+ *   --html [output_filename] (optional)
+ *     - If this flag is present, the script will generate a visual HTML report.
+ *     - If `[output_filename]` is provided, the report will be saved to that file.
+ *     - If the filename is omitted, it defaults to 'git-blame-stats-report.html'.
+ *
+ * --- Behavior ---
+ *
+ * 1.  CSV Output (Default):
+ *     - If the `--html` flag is not used, the script will print blame statistics
+ *       in CSV format directly to the standard output.
+ *     - Each row represents a committer's contribution to a single file.
+ *     - The columns are: `repository_name,file_path,file_name,username,lines_for_committer,total_lines`.
+ *
+ * 2.  HTML Report Output (`--html`):
+ *     - Generates a single, self-contained HTML file with interactive charts and a
+ *       detailed table of all author statistics.
+ *     - The report includes bar charts for "Lines of Code per Author" and "Files
+ *       Touched per Author" for the top 20 contributors.
+ *     - A full table lists every author, their total lines owned, and the number
+ *       of files they've contributed to.
+ *
+ * --- Examples ---
+ *
+ *   - Analyze the entire repository and print CSV to console:
+ *     npx ts-node blame-stats.ts
+ *
+ *   - Analyze a specific subdirectory and generate an HTML report with a default name:
+ *     npx ts-node blame-stats.ts ./src --html
+ *
+ *   - Analyze a single file and save the HTML report with a custom name:
+ *     npx ts-node blame-stats.ts ./src/index.js --html my-report.html
+ */
 
 import { execSync } from 'child_process';
 import * as fs from 'fs';
@@ -8,13 +65,13 @@ import * as path from 'path';
 interface BlameRecord {
     filePath: string;
     fileName: string;
-    committerEmail: string;
+    username: string;
     linesForCommitter: number;
     totalLines: number;
 }
 
 interface AggregatedUserStats {
-    email: string;
+    username: string;
     totalLines: number;
     fileCount: number;
     files: Set<string>;
@@ -62,6 +119,8 @@ function parseArgs(): CliArgs {
     return result as CliArgs;
 }
 
+type LineBlameInfo = { username: string; time: number };
+
 /**
  * Gathers blame statistics for all relevant files in the repository.
  */
@@ -92,6 +151,7 @@ function gatherRepoData(targetPath: string): { records: BlameRecord[], repoRoot:
     const files = filesOutput ? filesOutput.split('\n') : [];
 
     const allRecords: BlameRecord[] = [];
+    const oneYearAgo = Math.floor(Date.now() / 1000) - (365 * 24 * 60 * 60);
 
     for (const file of files) {
         if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) continue;
@@ -102,19 +162,40 @@ function gatherRepoData(targetPath: string): { records: BlameRecord[], repoRoot:
         try {
             const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { maxBuffer: 1024 * 1024 * 50 }).toString();
             const authorCounts = new Map<string, number>();
-
-            blameOutput.trim().split('\n').forEach(line => {
-                if (line.startsWith('author-mail ')) {
-                    const email = line.substring('author-mail '.length);
-                    authorCounts.set(email, (authorCounts.get(email) || 0) + 1);
-                }
-            });
             
-            for (const [email, count] of authorCounts.entries()) {
+            const blameLines = blameOutput.trim().split('\n');
+            const lineInfos: LineBlameInfo[] = [];
+            let currentInfo: Partial<LineBlameInfo> = {};
+
+            for (const line of blameLines) {
+                if (/^[0-9a-f]{40}/.test(line)) {
+                    if (currentInfo.username && currentInfo.time) {
+                        lineInfos.push(currentInfo as LineBlameInfo);
+                    }
+                    currentInfo = {};
+                } else if (line.startsWith('author ')) {
+                    currentInfo.username = line.substring('author '.length).replace(/^<|>$/g, '');
+                } else if (line.startsWith('committer-time ')) {
+                    currentInfo.time = parseInt(line.substring('committer-time '.length), 10);
+                }
+            }
+            if (currentInfo.username && currentInfo.time) {
+                lineInfos.push(currentInfo as LineBlameInfo);
+            }
+
+            for (const info of lineInfos) {
+                let authorToCredit = info.username;
+                if (info.time < oneYearAgo) {
+                    authorToCredit = 'Legacy';
+                }
+                authorCounts.set(authorToCredit, (authorCounts.get(authorToCredit) || 0) + 1);
+            }
+            
+            for (const [username, count] of authorCounts.entries()) {
                 allRecords.push({
                     filePath: file,
                     fileName: fileName,
-                    committerEmail: email,
+                    username: username,
                     linesForCommitter: count,
                     totalLines: totalLines
                 });
@@ -134,15 +215,15 @@ function gatherRepoData(targetPath: string): { records: BlameRecord[], repoRoot:
 function aggregateDataForHtml(records: BlameRecord[]): AggregatedUserStats[] {
     const userStats = new Map<string, AggregatedUserStats>();
     for (const record of records) {
-        if (!userStats.has(record.committerEmail)) {
-            userStats.set(record.committerEmail, { 
-                email: record.committerEmail, 
+        if (!userStats.has(record.username)) {
+            userStats.set(record.username, {
+                username: record.username,
                 totalLines: 0, 
                 fileCount: 0,
                 files: new Set<string>()
             });
         }
-        const stats = userStats.get(record.committerEmail)!;
+        const stats = userStats.get(record.username)!;
         stats.totalLines += record.linesForCommitter;
         stats.files.add(record.filePath);
     }
@@ -158,10 +239,10 @@ function aggregateDataForHtml(records: BlameRecord[]): AggregatedUserStats[] {
  * Prints the collected data in CSV format to the console.
  */
 function printCsv(records: BlameRecord[], repoRoot: string) {
-    console.log('repository_name,file_path,file_name,committer_email,lines_for_committer,total_lines');
+    console.log('repository_name,file_path,file_name,username,lines_for_committer,total_lines');
     const repoName = path.basename(repoRoot);
     for (const record of records) {
-        console.log(`${repoName},"${record.filePath}","${record.fileName}",${record.committerEmail},${record.linesForCommitter},${record.totalLines}`);
+        console.log(`${repoName},"${record.filePath}","${record.fileName}",${record.username},${record.linesForCommitter},${record.totalLines}`);
     }
 }
 
@@ -171,13 +252,13 @@ function printCsv(records: BlameRecord[], repoRoot: string) {
 function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, originalCwd: string) {
     const topN = 20; // Show top N users in charts
     const chartData = data.slice(0, topN);
-    const labels = JSON.stringify(chartData.map(u => u.email));
+    const labels = JSON.stringify(chartData.map(u => u.username));
     const linesData = JSON.stringify(chartData.map(u => u.totalLines));
     const filesData = JSON.stringify(chartData.map(u => u.fileCount));
 
     const tableRows = data.map(u => `
         <tr>
-            <td>${u.email}</td>
+            <td>${u.username}</td>
             <td>${u.totalLines.toLocaleString()}</td>
             <td>${u.fileCount.toLocaleString()}</td>
         </tr>
