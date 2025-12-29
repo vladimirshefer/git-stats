@@ -80,17 +80,15 @@ interface LineBlame {
     filePath: string;
 }
 
-interface AggregatedUserStats {
+interface AggregatedStats {
     username: string;
-    linesLast7Days: number;
-    linesLast30Days: number;
-    linesLast365Days: number;
-    linesLast5Years: number;
-    linesLast10Years: number;
-    linesOlder: number;
-    totalLines: number;
-    fileCount: number;
-    files: Set<string>;
+    last7Days: number;
+    last30Days: number;
+    last365Days: number;
+    last5Years: number;
+    last10Years: number;
+    older: number;
+    totalValue: number;
 }
 
 // Kept for CSV output compatibility
@@ -105,23 +103,27 @@ interface BlameRecord {
 
 interface CliArgs {
     targetPath: string;
+    outputFormat: 'csv' | 'html';
     htmlOutputFile?: string;
     filenameGlobs?: string[];
     excludeGlobs?: string[];
+    granularity: 'line' | 'file';
 }
 
 // --- Main Application Logic ---
 
 function main() {
     const args = parseArgs();
-    const { lineBlames, repoRoot, originalCwd } = gatherAllLineBlames(args);
+    const { data, repoRoot, originalCwd } = gatherStats(args);
 
-    if (args.htmlOutputFile) {
-        const aggregatedData = aggregateDataForHtml(lineBlames);
-        generateHtmlReport(aggregatedData, args.htmlOutputFile, originalCwd);
-        console.log(`HTML report generated: ${path.resolve(originalCwd, args.htmlOutputFile)}`);
+    if (args.outputFormat === 'html') {
+        const aggregatedData = aggregateData(data);
+        const htmlFile = args.htmlOutputFile || 'git-blame-stats-report.html';
+        generateHtmlReport(aggregatedData, htmlFile, originalCwd);
+        console.log(`HTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
-        const records = aggregateForCsv(lineBlames);
+        // Note: CSV output is not granularity-aware in this version.
+        const records = aggregateForCsv(data);
         printCsv(records, repoRoot);
     }
 }
@@ -129,16 +131,16 @@ function main() {
 /**
  * Aggregates line-level blame info into the legacy per-file record format for CSV output.
  */
-function aggregateForCsv(lineBlames: LineBlame[]): BlameRecord[] {
+function aggregateForCsv(blameData: LineBlame[]): BlameRecord[] {
     const fileUserLines = new Map<string, Map<string, number>>();
     const fileTotalLines = new Map<string, number>();
 
-    for (const line of lineBlames) {
-        if (!fileUserLines.has(line.filePath)) {
-            fileUserLines.set(line.filePath, new Map<string, number>());
+    for (const item of blameData) {
+        if (!fileUserLines.has(item.filePath)) {
+            fileUserLines.set(item.filePath, new Map<string, number>());
         }
-        const userLines = fileUserLines.get(line.filePath)!;
-        userLines.set(line.username, (userLines.get(line.username) || 0) + 1);
+        const userLines = fileUserLines.get(item.filePath)!;
+        userLines.set(item.username, (userLines.get(item.username) || 0) + 1);
     }
 
     // Get total line counts for each file that has blame info
@@ -174,16 +176,30 @@ function parseArgs(): CliArgs {
     const cliArgs = process.argv.slice(2);
     const result: Partial<CliArgs> = {
         filenameGlobs: [],
-        excludeGlobs: []
+        excludeGlobs: [],
+        outputFormat: 'csv', // Default to CSV
+        granularity: 'line', // Default granularity
     };
     
     for (let i = 0; i < cliArgs.length; i++) {
         const arg = cliArgs[i];
         if (arg === '--html') {
+            result.outputFormat = 'html';
             const nextArg = cliArgs[i + 1];
-            result.htmlOutputFile = (nextArg && !nextArg.startsWith('-')) ? nextArg : 'git-blame-stats-report.html';
-            if (result.htmlOutputFile === nextArg) i++; // Consume the filename argument
-        } else if (arg === '--filename') {
+            if (nextArg && !nextArg.startsWith('-')) {
+                result.htmlOutputFile = nextArg;
+                i++; // Consume the filename argument
+            }
+        } else if (arg.startsWith('--granularity=')) {
+            const value = arg.split('=')[1] as 'line' | 'file';
+            if (value === 'line' || value === 'file') {
+                result.granularity = value;
+            } else {
+                console.error(`Invalid granularity: ${value}. Must be 'line' or 'file'.`);
+                process.exit(1);
+            }
+        }
+        else if (arg === '--filename') {
             const nextArg = cliArgs[i + 1];
             if (nextArg && !nextArg.startsWith('-')) {
                 result.filenameGlobs!.push(nextArg);
@@ -205,13 +221,13 @@ function parseArgs(): CliArgs {
     return result as CliArgs;
 }
 
-type LineBlameInfo = { username: string; time: number };
-
 /**
- * Gathers blame statistics for all relevant files in the repository.
+ * Gathers statistics based on the specified granularity.
+ * @param args - CLI arguments.
+ * @returns An object containing the collected data, repo root, and original CWD.
  */
-function gatherAllLineBlames(args: CliArgs): { lineBlames: LineBlame[], repoRoot: string, originalCwd: string } {
-    const { targetPath, filenameGlobs, excludeGlobs } = args;
+function gatherStats(args: CliArgs): { data: LineBlame[], repoRoot: string, originalCwd: string } {
+    const { targetPath, filenameGlobs, excludeGlobs, granularity } = args;
     const originalCwd = process.cwd();
     const discoveryPath = path.resolve(originalCwd, targetPath);
 
@@ -219,7 +235,7 @@ function gatherAllLineBlames(args: CliArgs): { lineBlames: LineBlame[], repoRoot
         console.error(`Error: Path does not exist: ${discoveryPath}`);
         process.exit(1);
     }
-    
+
     const gitCommandPath = fs.statSync(discoveryPath).isDirectory() ? discoveryPath : path.dirname(discoveryPath);
 
     let repoRoot: string;
@@ -231,7 +247,7 @@ function gatherAllLineBlames(args: CliArgs): { lineBlames: LineBlame[], repoRoot
     }
 
     process.chdir(repoRoot);
-    
+
     const finalTargetPath = path.relative(repoRoot, discoveryPath);
     const includePathspecs = (filenameGlobs && filenameGlobs.length > 0)
         ? filenameGlobs.map(g => `'${g}'`).join(' ')
@@ -244,62 +260,73 @@ function gatherAllLineBlames(args: CliArgs): { lineBlames: LineBlame[], repoRoot
     const filesOutput = execSync(filesCommand).toString().trim();
     const files = filesOutput ? filesOutput.split('\n') : [];
 
-    const allLineBlames: LineBlame[] = [];
+    const allData: LineBlame[] = [];
     const totalFiles = files.length;
     let processedCount = 0;
 
-    console.error(`Found ${totalFiles} files to analyze...`);
+    console.error(`Found ${totalFiles} files to analyze with '${granularity}' granularity...`);
 
     for (const file of files) {
         processedCount++;
         const progressMessage = `[${processedCount}/${totalFiles}] Analyzing: ${file}`;
-        // Pad the message to overwrite the previous line completely, then add a carriage return
         process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
-
+        
         if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) {
             continue;
         }
 
         try {
-            const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { maxBuffer: 1024 * 1024 * 50 }).toString();
-            
-            const blameLines = blameOutput.trim().split('\n');
-            const lineInfos: LineBlameInfo[] = [];
-            let currentInfo: Partial<LineBlameInfo> = {};
-
-            for (const line of blameLines) {
-                if (/^[0-9a-f]{40}/.test(line)) {
-                    if (currentInfo.username && currentInfo.time) {
-                        lineInfos.push(currentInfo as LineBlameInfo);
+            let fileData: LineBlame[] = [];
+            if (granularity === 'line') {
+                fileData = getLineBlameForFile(file);
+            } else if (granularity === 'file') {
+                let blameForFile = getLineBlameForFile(file);
+                let resultMap: {[username: string]: LineBlame} = {}
+                blameForFile.forEach(lineBlame => {
+                    if (!resultMap[lineBlame.username] || resultMap[lineBlame.username].time<lineBlame.time) {
+                        resultMap[lineBlame.username] = lineBlame
                     }
-                    currentInfo = {};
-                } else if (line.startsWith('author ')) {
-                    currentInfo.username = line.substring('author '.length).replace(/^<|>$/g, '');
-                } else if (line.startsWith('committer-time ')) {
-                    currentInfo.time = parseInt(line.substring('committer-time '.length), 10);
-                }
+                })
+                fileData.push(...Object.values(resultMap));
             }
-            if (currentInfo.username && currentInfo.time) {
-                lineInfos.push(currentInfo as LineBlameInfo);
-            }
-
-            for (const info of lineInfos) {
-                allLineBlames.push({
-                    username: info.username,
-                    time: info.time,
-                    filePath: file
-                });
-            }
+            allData.push(...fileData);
         } catch (e) {
-            // Silently skip files that error (e.g., binary files) to not disrupt the progress bar
+            // Silently skip files that error
         }
     }
-    
-    // Clear the progress line and print a final message
+
     process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
     console.error(`Analysis complete. Processed ${totalFiles} files.`);
 
-    return { lineBlames: allLineBlames, repoRoot, originalCwd };
+    return { data: allData, repoRoot, originalCwd };
+}
+
+/**
+ * Gets blame information for every line in a file.
+ */
+function getLineBlameForFile(file: string): LineBlame[] {
+    const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { maxBuffer: 1024 * 1024 * 50 }).toString();
+    const blameLines = blameOutput.trim().split('\n');
+    const lineInfos: { username: string; time: number }[] = [];
+    let currentInfo: Partial<{ username: string; time: number }> = {};
+
+    for (const line of blameLines) {
+        if (/^[0-9a-f]{40}/.test(line)) {
+            if (currentInfo.username && currentInfo.time) {
+                lineInfos.push(currentInfo as { username: string; time: number });
+            }
+            currentInfo = {};
+        } else if (line.startsWith('author ')) {
+            currentInfo.username = line.substring('author '.length).replace(/^<|>$/g, '');
+        } else if (line.startsWith('committer-time ')) {
+            currentInfo.time = parseInt(line.substring('committer-time '.length), 10);
+        }
+    }
+    if (currentInfo.username && currentInfo.time) {
+        lineInfos.push(currentInfo as { username: string; time: number });
+    }
+    
+    return lineInfos.map(info => ({ ...info, filePath: file }));
 }
 
 // --- Output Generation ---
@@ -307,8 +334,8 @@ function gatherAllLineBlames(args: CliArgs): { lineBlames: LineBlame[], repoRoot
 /**
  * Aggregates raw blame records into per-user statistics for the HTML report.
  */
-function aggregateDataForHtml(lineBlames: LineBlame[]): AggregatedUserStats[] {
-    const userStats = new Map<string, AggregatedUserStats>();
+function aggregateData(blameData: LineBlame[]): AggregatedStats[] {
+    const userStats = new Map<string, AggregatedStats>();
     const now = Math.floor(Date.now() / 1000);
     const sevenDaysAgo = now - 7 * 24 * 60 * 60;
     const thirtyDaysAgo = now - 30 * 24 * 60 * 60;
@@ -316,45 +343,39 @@ function aggregateDataForHtml(lineBlames: LineBlame[]): AggregatedUserStats[] {
     const fiveYearsAgo = now - 5 * 365 * 24 * 60 * 60;
     const tenYearsAgo = now - 10 * 365 * 24 * 60 * 60;
 
-    for (const line of lineBlames) {
-        if (!userStats.has(line.username)) {
-            userStats.set(line.username, {
-                username: line.username,
-                linesLast7Days: 0,
-                linesLast30Days: 0,
-                linesLast365Days: 0,
-                linesLast5Years: 0,
-                linesLast10Years: 0,
-                linesOlder: 0,
-                totalLines: 0, 
-                fileCount: 0,
-                files: new Set<string>()
+    for (const item of blameData) {
+        if (!userStats.has(item.username)) {
+            userStats.set(item.username, {
+                username: item.username,
+                last7Days: 0,
+                last30Days: 0,
+                last365Days: 0,
+                last5Years: 0,
+                last10Years: 0,
+                older: 0,
+                totalValue: 0, 
             });
         }
-        const stats = userStats.get(line.username)!;
-        stats.totalLines++;
-        stats.files.add(line.filePath);
+        const stats = userStats.get(item.username)!;
+        stats.totalValue++;
 
-        if (line.time >= sevenDaysAgo) {
-            stats.linesLast7Days++;
-        } else if (line.time >= thirtyDaysAgo) {
-            stats.linesLast30Days++;
-        } else if (line.time >= oneYearAgo) {
-            stats.linesLast365Days++;
-        } else if (line.time >= fiveYearsAgo) {
-            stats.linesLast5Years++;
-        } else if (line.time >= tenYearsAgo) {
-            stats.linesLast10Years++;
+        if (item.time >= sevenDaysAgo) {
+            stats.last7Days++;
+        } else if (item.time >= thirtyDaysAgo) {
+            stats.last30Days++;
+        } else if (item.time >= oneYearAgo) {
+            stats.last365Days++;
+        } else if (item.time >= fiveYearsAgo) {
+            stats.last5Years++;
+        } else if (item.time >= tenYearsAgo) {
+            stats.last10Years++;
         } else {
-            stats.linesOlder++;
+            stats.older++;
         }
     }
 
-    // Convert map to array and calculate final file counts
-    return Array.from(userStats.values()).map(stats => ({
-        ...stats,
-        fileCount: stats.files.size
-    })).sort((a, b) => b.totalLines - a.totalLines);
+    // Convert map to array and sort
+    return Array.from(userStats.values()).sort((a, b) => b.totalValue - a.totalValue);
 }
 
 /**
@@ -371,31 +392,31 @@ function printCsv(records: BlameRecord[], repoRoot: string) {
 /**
  * Generates a self-contained HTML report file with charts.
  */
-function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, originalCwd: string) {
+function generateHtmlReport(data: AggregatedStats[], outputFile: string, originalCwd: string) {
     const topN = 20; // Show top N users in charts
     const chartData = data.slice(0, topN);
     const labels = JSON.stringify(chartData.map(u => u.username));
     
-    const linesLast7 = JSON.stringify(chartData.map(u => u.linesLast7Days));
-    const linesLast30 = JSON.stringify(chartData.map(u => u.linesLast30Days));
-    const linesLast365 = JSON.stringify(chartData.map(u => u.linesLast365Days));
-    const linesLast5Years = JSON.stringify(chartData.map(u => u.linesLast5Years));
-    const linesLast10Years = JSON.stringify(chartData.map(u => u.linesLast10Years));
-    const linesOlder = JSON.stringify(chartData.map(u => u.linesOlder));
+    const last7 = JSON.stringify(chartData.map(d => d.last7Days));
+    const last30 = JSON.stringify(chartData.map(d => d.last30Days));
+    const last365 = JSON.stringify(chartData.map(d => d.last365Days));
+    const last5Years = JSON.stringify(chartData.map(d => d.last5Years));
+    const last10Years = JSON.stringify(chartData.map(d => d.last10Years));
+    const older = JSON.stringify(chartData.map(d => d.older));
 
-    const filesData = JSON.stringify(chartData.map(u => u.fileCount));
+    const tableHeaderLabel = 'Total';
+    const chartTitleLabel = 'Contributions';
 
     const tableRows = data.map(u => `
         <tr>
             <td>${u.username}</td>
-            <td class="num">${u.totalLines.toLocaleString()}</td>
-            <td class="num">${u.linesLast7Days.toLocaleString()}</td>
-            <td class="num">${u.linesLast30Days.toLocaleString()}</td>
-            <td class="num">${u.linesLast365Days.toLocaleString()}</td>
-            <td class="num">${u.linesLast5Years.toLocaleString()}</td>
-            <td class="num">${u.linesLast10Years.toLocaleString()}</td>
-            <td class="num">${u.linesOlder.toLocaleString()}</td>
-            <td class="num">${u.fileCount.toLocaleString()}</td>
+            <td class="num">${u.totalValue.toLocaleString()}</td>
+            <td class="num">${u.last7Days.toLocaleString()}</td>
+            <td class="num">${u.last30Days.toLocaleString()}</td>
+            <td class="num">${u.last365Days.toLocaleString()}</td>
+            <td class="num">${u.last5Years.toLocaleString()}</td>
+            <td class="num">${u.last10Years.toLocaleString()}</td>
+            <td class="num">${u.older.toLocaleString()}</td>
         </tr>
     `).join('');
     
@@ -411,10 +432,9 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #f8f9fa; color: #212529; }
-        .container { max-width: 1200px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.05); }
+        .container { max-width: 900px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.05); }
         h1, h2 { border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
-        .chart-container { display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap; }
-        .chart { flex: 1 1 45%; min-width: 300px; }
+        .chart-container { margin-top: 20px; }
         table { width: 100%; border-collapse: collapse; margin-top: 30px; }
         th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; }
         th.num, td.num { text-align: right; }
@@ -425,30 +445,23 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
 </head>
 <body>
     <div class="container">
-        <h1>Git Blame Statistics</h1>
+        <h1>Git Contribution Statistics</h1>
         <div class="chart-container">
-            <div class="chart">
-                <h2>Lines of Code per Author (Top ${topN})</h2>
-                <canvas id="linesChart"></canvas>
-            </div>
-            <div class="chart">
-                <h2>Files Touched per Author (Top ${topN})</h2>
-                <canvas id="filesChart"></canvas>
-            </div>
+            <h2>${chartTitleLabel} per Author (Top ${topN})</h2>
+            <canvas id="mainChart"></canvas>
         </div>
         <h2>All Author Stats</h2>
         <table>
             <thead>
                 <tr>
                     <th>Author</th>
-                    <th class="num">Total Lines</th>
+                    <th class="num">${tableHeaderLabel}</th>
                     <th class="num">< 7 days</th>
                     <th class="num">8-30 days</th>
                     <th class="num">< 1 year</th>
                     <th class="num">Last 5 Years</th>
                     <th class="num">Last 10 Years</th>
                     <th class="num">Older</th>
-                    <th class="num">Files Touched</th>
                 </tr>
             </thead>
             <tbody>
@@ -460,18 +473,18 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
         const chartData = ${JSON.stringify(chartData)};
         const userMap = new Map(chartData.map(u => [u.username, u]));
 
-        const ctxLines = document.getElementById('linesChart').getContext('2d');
-        const linesChart = new Chart(ctxLines, {
+        const ctx = document.getElementById('mainChart').getContext('2d');
+        const mainChart = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: ${labels},
                 datasets: [
-                    { label: '< 7 days', data: ${linesLast7}, backgroundColor: 'rgba(214, 40, 40, 0.7)' },
-                    { label: '8-30 days', data: ${linesLast30}, backgroundColor: 'rgba(247, 127, 0, 0.7)' },
-                    { label: '< 1 year', data: ${linesLast365}, backgroundColor: 'rgba(252, 191, 73, 0.7)' },
-                    { label: 'Last 5 Years', data: ${linesLast5Years}, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
-                    { label: 'Last 10 Years', data: ${linesLast10Years}, backgroundColor: 'rgba(153, 102, 255, 0.7)' },
-                    { label: 'Older', data: ${linesOlder}, backgroundColor: 'rgba(201, 203, 207, 0.7)' }
+                    { label: '< 7 days', data: ${last7}, backgroundColor: 'rgba(214, 40, 40, 0.7)' },
+                    { label: '8-30 days', data: ${last30}, backgroundColor: 'rgba(247, 127, 0, 0.7)' },
+                    { label: '< 1 year', data: ${last365}, backgroundColor: 'rgba(252, 191, 73, 0.7)' },
+                    { label: 'Last 5 Years', data: ${last5Years}, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
+                    { label: 'Last 10 Years', data: ${last10Years}, backgroundColor: 'rgba(153, 102, 255, 0.7)' },
+                    { label: 'Older', data: ${older}, backgroundColor: 'rgba(201, 203, 207, 0.7)' }
                 ]
             },
             options: { 
@@ -490,43 +503,36 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
                             Chart.defaults.plugins.legend.onClick(e, legendItem, legend);
 
                             const chart = legend.chart;
-                            
-                            // Determine which datasets are visible
                             const visibilities = chart.data.datasets.map((_, i) => chart.isDatasetVisible(i));
-                            
-                            // Get the user data objects in the current order from the chart
                             const usersToSort = chart.data.labels.map(label => userMap.get(label));
 
-                            // Sort the users based on the sum of their visible data
                             usersToSort.sort((a, b) => {
                                 let totalA = 0;
                                 let totalB = 0;
+                                if (visibilities[0]) totalA += a.last7Days;
+                                if (visibilities[1]) totalA += a.last30Days;
+                                if (visibilities[2]) totalA += a.last365Days;
+                                if (visibilities[3]) totalA += a.last5Years;
+                                if (visibilities[4]) totalA += a.last10Years;
+                                if (visibilities[5]) totalA += a.older;
 
-                                if (visibilities[0]) totalA += a.linesLast7Days;
-                                if (visibilities[1]) totalA += a.linesLast30Days;
-                                if (visibilities[2]) totalA += a.linesLast365Days;
-                                if (visibilities[3]) totalA += a.linesLast5Years;
-                                if (visibilities[4]) totalA += a.linesLast10Years;
-                                if (visibilities[5]) totalA += a.linesOlder;
-
-                                if (visibilities[0]) totalB += b.linesLast7Days;
-                                if (visibilities[1]) totalB += b.linesLast30Days;
-                                if (visibilities[2]) totalB += b.linesLast365Days;
-                                if (visibilities[3]) totalB += b.linesLast5Years;
-                                if (visibilities[4]) totalB += b.linesLast10Years;
-                                if (visibilities[5]) totalB += b.linesOlder;
+                                if (visibilities[0]) totalB += b.last7Days;
+                                if (visibilities[1]) totalB += b.last30Days;
+                                if (visibilities[2]) totalB += b.last365Days;
+                                if (visibilities[3]) totalB += b.last5Years;
+                                if (visibilities[4]) totalB += b.last10Years;
+                                if (visibilities[5]) totalB += b.older;
 
                                 return totalB - totalA;
                             });
                             
-                            // Extract new sorted data arrays
                             chart.data.labels = usersToSort.map(u => u.username);
-                            chart.data.datasets[0].data = usersToSort.map(u => u.linesLast7Days);
-                            chart.data.datasets[1].data = usersToSort.map(u => u.linesLast30Days);
-                            chart.data.datasets[2].data = usersToSort.map(u => u.linesLast365Days);
-                            chart.data.datasets[3].data = usersToSort.map(u => u.linesLast5Years);
-                            chart.data.datasets[4].data = usersToSort.map(u => u.linesLast10Years);
-                            chart.data.datasets[5].data = usersToSort.map(u => u.linesOlder);
+                            chart.data.datasets[0].data = usersToSort.map(u => u.last7Days);
+                            chart.data.datasets[1].data = usersToSort.map(u => u.last30Days);
+                            chart.data.datasets[2].data = usersToSort.map(u => u.last365Days);
+                            chart.data.datasets[3].data = usersToSort.map(u => u.last5Years);
+                            chart.data.datasets[4].data = usersToSort.map(u => u.last10Years);
+                            chart.data.datasets[5].data = usersToSort.map(u => u.older);
                             
                             chart.update();
                         }
@@ -546,27 +552,6 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
                         }
                     }
                 }
-            }
-        });
-
-        const ctxFiles = document.getElementById('filesChart').getContext('2d');
-        new Chart(ctxFiles, {
-            type: 'bar',
-            data: {
-                labels: ${labels},
-                datasets: [{
-                    label: 'Files Touched',
-                    data: ${filesData},
-                    backgroundColor: 'rgba(75, 192, 192, 0.7)',
-                    borderWidth: 1
-                }]
-            },
-            options: { 
-                indexAxis: 'y', 
-                scales: { 
-                    x: { beginAtZero: true },
-                    y: { ticks: { autoSkip: false } }
-                } 
             }
         });
     </script>
