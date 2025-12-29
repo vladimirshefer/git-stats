@@ -74,6 +74,24 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // --- Interfaces for Data Structures ---
+interface LineBlame {
+    username: string;
+    time: number;
+    filePath: string;
+}
+
+interface AggregatedUserStats {
+    username: string;
+    linesLast7Days: number;
+    linesLast30Days: number;
+    linesLast365Days: number;
+    linesOlder: number;
+    totalLines: number;
+    fileCount: number;
+    files: Set<string>;
+}
+
+// Kept for CSV output compatibility
 interface BlameRecord {
     filePath: string;
     fileName: string;
@@ -82,12 +100,6 @@ interface BlameRecord {
     totalLines: number;
 }
 
-interface AggregatedUserStats {
-    username: string;
-    totalLines: number;
-    fileCount: number;
-    files: Set<string>;
-}
 
 interface CliArgs {
     targetPath: string;
@@ -100,16 +112,58 @@ interface CliArgs {
 
 function main() {
     const args = parseArgs();
-    const { records, repoRoot, originalCwd } = gatherRepoData(args);
-    
+    const { lineBlames, repoRoot, originalCwd } = gatherAllLineBlames(args);
+
     if (args.htmlOutputFile) {
-        const aggregatedData = aggregateDataForHtml(records);
+        const aggregatedData = aggregateDataForHtml(lineBlames);
         generateHtmlReport(aggregatedData, args.htmlOutputFile, originalCwd);
         console.log(`HTML report generated: ${path.resolve(originalCwd, args.htmlOutputFile)}`);
     } else {
+        const records = aggregateForCsv(lineBlames);
         printCsv(records, repoRoot);
     }
 }
+
+/**
+ * Aggregates line-level blame info into the legacy per-file record format for CSV output.
+ */
+function aggregateForCsv(lineBlames: LineBlame[]): BlameRecord[] {
+    const fileUserLines = new Map<string, Map<string, number>>();
+    const fileTotalLines = new Map<string, number>();
+
+    for (const line of lineBlames) {
+        if (!fileUserLines.has(line.filePath)) {
+            fileUserLines.set(line.filePath, new Map<string, number>());
+        }
+        const userLines = fileUserLines.get(line.filePath)!;
+        userLines.set(line.username, (userLines.get(line.username) || 0) + 1);
+    }
+
+    // Get total line counts for each file that has blame info
+    for (const filePath of fileUserLines.keys()) {
+        try {
+            const totalLines = fs.readFileSync(filePath, 'utf-8').split('\n').length;
+            fileTotalLines.set(filePath, totalLines);
+        } catch (e) {
+            fileTotalLines.set(filePath, 0); // File might not be accessible anymore
+        }
+    }
+
+    const records: BlameRecord[] = [];
+    for (const [filePath, userLines] of fileUserLines.entries()) {
+        for (const [username, linesForCommitter] of userLines.entries()) {
+            records.push({
+                filePath,
+                fileName: path.basename(filePath),
+                username,
+                linesForCommitter,
+                totalLines: fileTotalLines.get(filePath) || 0
+            });
+        }
+    }
+    return records;
+}
+
 
 /**
  * Parses command-line arguments to determine the target path and output mode.
@@ -154,7 +208,7 @@ type LineBlameInfo = { username: string; time: number };
 /**
  * Gathers blame statistics for all relevant files in the repository.
  */
-function gatherRepoData(args: CliArgs): { records: BlameRecord[], repoRoot: string, originalCwd: string } {
+function gatherAllLineBlames(args: CliArgs): { lineBlames: LineBlame[], repoRoot: string, originalCwd: string } {
     const { targetPath, filenameGlobs, excludeGlobs } = args;
     const originalCwd = process.cwd();
     const discoveryPath = path.resolve(originalCwd, targetPath);
@@ -188,19 +242,14 @@ function gatherRepoData(args: CliArgs): { records: BlameRecord[], repoRoot: stri
     const filesOutput = execSync(filesCommand).toString().trim();
     const files = filesOutput ? filesOutput.split('\n') : [];
 
-    const allRecords: BlameRecord[] = [];
-    const oneYearAgo = Math.floor(Date.now() / 1000) - (365 * 24 * 60 * 60);
+    const allLineBlames: LineBlame[] = [];
 
     for (const file of files) {
         if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) continue;
 
-        const totalLines = fs.readFileSync(file, 'utf-8').split('\n').length;
-        const fileName = path.basename(file);
-
         try {
             const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { maxBuffer: 1024 * 1024 * 50 }).toString();
-            const authorCounts = new Map<string, number>();
-
+            
             const blameLines = blameOutput.trim().split('\n');
             const lineInfos: LineBlameInfo[] = [];
             let currentInfo: Partial<LineBlameInfo> = {};
@@ -222,27 +271,17 @@ function gatherRepoData(args: CliArgs): { records: BlameRecord[], repoRoot: stri
             }
 
             for (const info of lineInfos) {
-                let authorToCredit = info.username;
-                if (info.time < oneYearAgo) {
-                    authorToCredit = 'Legacy';
-                }
-                authorCounts.set(authorToCredit, (authorCounts.get(authorToCredit) || 0) + 1);
-            }
-
-            for (const [username, count] of authorCounts.entries()) {
-                allRecords.push({
-                    filePath: file,
-                    fileName: fileName,
-                    username: username,
-                    linesForCommitter: count,
-                    totalLines: totalLines
+                allLineBlames.push({
+                    username: info.username,
+                    time: info.time,
+                    filePath: file
                 });
             }
         } catch (e) {
             // Silently skip files that error (e.g., binary files)
         }
     }
-    return { records: allRecords, repoRoot, originalCwd };
+    return { lineBlames: allLineBlames, repoRoot, originalCwd };
 }
 
 // --- Output Generation ---
@@ -250,20 +289,39 @@ function gatherRepoData(args: CliArgs): { records: BlameRecord[], repoRoot: stri
 /**
  * Aggregates raw blame records into per-user statistics for the HTML report.
  */
-function aggregateDataForHtml(records: BlameRecord[]): AggregatedUserStats[] {
+function aggregateDataForHtml(lineBlames: LineBlame[]): AggregatedUserStats[] {
     const userStats = new Map<string, AggregatedUserStats>();
-    for (const record of records) {
-        if (!userStats.has(record.username)) {
-            userStats.set(record.username, {
-                username: record.username,
+    const now = Math.floor(Date.now() / 1000);
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60;
+    const thirtyDaysAgo = now - 30 * 24 * 60 * 60;
+    const threeSixtyFiveDaysAgo = now - 365 * 24 * 60 * 60;
+
+    for (const line of lineBlames) {
+        if (!userStats.has(line.username)) {
+            userStats.set(line.username, {
+                username: line.username,
+                linesLast7Days: 0,
+                linesLast30Days: 0,
+                linesLast365Days: 0,
+                linesOlder: 0,
                 totalLines: 0, 
                 fileCount: 0,
                 files: new Set<string>()
             });
         }
-        const stats = userStats.get(record.username)!;
-        stats.totalLines += record.linesForCommitter;
-        stats.files.add(record.filePath);
+        const stats = userStats.get(line.username)!;
+        stats.totalLines++;
+        stats.files.add(line.filePath);
+
+        if (line.time >= sevenDaysAgo) {
+            stats.linesLast7Days++;
+        } else if (line.time >= thirtyDaysAgo) {
+            stats.linesLast30Days++;
+        } else if (line.time >= threeSixtyFiveDaysAgo) {
+            stats.linesLast365Days++;
+        } else {
+            stats.linesOlder++;
+        }
     }
 
     // Convert map to array and calculate final file counts
@@ -291,14 +349,23 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
     const topN = 20; // Show top N users in charts
     const chartData = data.slice(0, topN);
     const labels = JSON.stringify(chartData.map(u => u.username));
-    const linesData = JSON.stringify(chartData.map(u => u.totalLines));
+    
+    const linesLast7 = JSON.stringify(chartData.map(u => u.linesLast7Days));
+    const linesLast30 = JSON.stringify(chartData.map(u => u.linesLast30Days));
+    const linesLast365 = JSON.stringify(chartData.map(u => u.linesLast365Days));
+    const linesOlder = JSON.stringify(chartData.map(u => u.linesOlder));
+
     const filesData = JSON.stringify(chartData.map(u => u.fileCount));
 
     const tableRows = data.map(u => `
         <tr>
             <td>${u.username}</td>
-            <td>${u.totalLines.toLocaleString()}</td>
-            <td>${u.fileCount.toLocaleString()}</td>
+            <td class="num">${u.totalLines.toLocaleString()}</td>
+            <td class="num">${u.linesLast7Days.toLocaleString()}</td>
+            <td class="num">${u.linesLast30Days.toLocaleString()}</td>
+            <td class="num">${u.linesLast365Days.toLocaleString()}</td>
+            <td class="num">${u.linesOlder.toLocaleString()}</td>
+            <td class="num">${u.fileCount.toLocaleString()}</td>
         </tr>
     `).join('');
     
@@ -320,6 +387,7 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
         .chart { flex: 1 1 45%; min-width: 300px; }
         table { width: 100%; border-collapse: collapse; margin-top: 30px; }
         th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; }
+        th.num, td.num { text-align: right; }
         thead { background-color: #e9ecef; }
         tbody tr:nth-child(odd) { background-color: #f8f9fa; }
         tbody tr:hover { background-color: #e9ecef; }
@@ -343,8 +411,12 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
             <thead>
                 <tr>
                     <th>Author</th>
-                    <th>Total Lines Owned</th>
-                    <th>Total Files Touched</th>
+                    <th class="num">Total Lines</th>
+                    <th class="num">< 7 days</th>
+                    <th class="num">8-30 days</th>
+                    <th class="num">31-365 days</th>
+                    <th class="num">> 365 days</th>
+                    <th class="num">Files Touched</th>
                 </tr>
             </thead>
             <tbody>
@@ -358,13 +430,36 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
             type: 'bar',
             data: {
                 labels: ${labels},
-                datasets: [{
-                    label: 'Lines of Code',
-                    data: ${linesData},
-                    borderWidth: 1
-                }]
+                datasets: [
+                    { label: '< 7 days', data: ${linesLast7}, backgroundColor: 'rgba(255, 99, 132, 0.7)' },
+                    { label: '8-30 days', data: ${linesLast30}, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
+                    { label: '31-365 days', data: ${linesLast365}, backgroundColor: 'rgba(255, 206, 86, 0.7)' },
+                    { label: '> 365 days', data: ${linesOlder}, backgroundColor: 'rgba(201, 203, 207, 0.7)' }
+                ]
             },
-            options: { indexAxis: 'y', scales: { y: { beginAtZero: true } } }
+            options: { 
+                indexAxis: 'y', 
+                scales: { 
+                    x: { stacked: true, beginAtZero: true },
+                    y: { stacked: true } 
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.x !== null) {
+                                    label += context.parsed.x.toLocaleString();
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
         });
 
         const ctxFiles = document.getElementById('filesChart').getContext('2d');
@@ -375,10 +470,11 @@ function generateHtmlReport(data: AggregatedUserStats[], outputFile: string, ori
                 datasets: [{
                     label: 'Files Touched',
                     data: ${filesData},
+                    backgroundColor: 'rgba(75, 192, 192, 0.7)',
                     borderWidth: 1
                 }]
             },
-            options: { indexAxis: 'y', scales: { y: { beginAtZero: true } } }
+            options: { indexAxis: 'y', scales: { x: { beginAtZero: true } } }
         });
     </script>
 </body>
