@@ -6,14 +6,12 @@
   "bin": {
     "git-blame-stats": "dist/blame-stats.js"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc"
+    "build": "node build.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "esbuild": "^0.20.0",
     "typescript": "^5.0.0"
   }
 }

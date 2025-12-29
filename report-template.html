@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git Blame Statistics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 900px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.05); }
+        h1, h2 { border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
+        .chart-container { margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+        th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; white-space: nowrap; }
+        th.num, td.num { text-align: right; }
+        thead { background-color: #e9ecef; }
+        tbody tr:nth-child(odd) { background-color: #f8f9fa; }
+        tbody tr:hover { background-color: #e9ecef; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Git Contribution Statistics</h1>
+        <div class="chart-container">
+            <h2>__CHART_TITLE__</h2>
+            <canvas id="mainChart"></canvas>
+        </div>
+        <h2>All Author Stats</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Author</th>
+                    __TABLE_HEADERS__
+                </tr>
+            </thead>
+            <tbody>
+                __TABLE_ROWS__
+            </tbody>
+        </table>
+    </div>
+    <script>
+        const chartData = __CHART_DATA_JSON__;
+        const userMap = new Map(chartData.map(u => [u.username, u]));
+        const labels = __CHART_LABELS_JSON__;
+        const datasets = __CHART_DATASETS_JSON__;
+
+        const ctx = document.getElementById('mainChart').getContext('2d');
+        const mainChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: datasets
+            },
+            options: { 
+                indexAxis: 'y', 
+                scales: { 
+                    x: { stacked: true, beginAtZero: true },
+                    y: { 
+                        stacked: true,
+                        ticks: { autoSkip: false }
+                    } 
+                },
+                plugins: {
+                    legend: {
+                        onClick: (e, legendItem, legend) => {
+                            Chart.defaults.plugins.legend.onClick(e, legendItem, legend);
+
+                            const chart = legend.chart;
+                            const visibilities = chart.data.datasets.map((_, i) => chart.isDatasetVisible(i));
+                            const usersToSort = chart.data.labels.map(label => userMap.get(label));
+
+                            usersToSort.sort((a, b) => {
+                                let totalA = 0;
+                                let totalB = 0;
+                                
+                                for (let i = 0; i < visibilities.length; i++) {
+                                    if (visibilities[i]) {
+                                        totalA += a.bucketValues[i] || 0;
+                                        totalB += b.bucketValues[i] || 0;
+                                    }
+                                }
+
+                                return totalB - totalA;
+                            });
+                            
+                            chart.data.labels = usersToSort.map(u => u.username);
+                            chart.data.datasets.forEach((dataset, i) => {
+                                dataset.data = usersToSort.map(u => u.bucketValues[i]);
+                            });
+                            
+                            chart.update();
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.x !== null) {
+                                    label += context.parsed.x.toLocaleString();
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

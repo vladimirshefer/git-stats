@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Git Blame Statistics Analyzer
  *
@@ -72,11 +71,12 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { generateHtmlReport, aggregateData } from './report-template';
 
 let sigintCaught = false;
 
 // --- Interfaces for Data Structures ---
-interface LineBlame {
+export interface LineBlame {
     repositoryName: string;
     username: string;
     time: number;
@@ -84,13 +84,6 @@ interface LineBlame {
     totalLinesInFile: number;
 }
 
-interface AggregatedStats {
-    username: string;
-    totalValue: number;
-    bucketValues: number[];
-}
-
-// Kept for CSV output compatibility
 interface BlameRecord {
     repositoryName: string;
     filePath: string;
@@ -199,9 +192,9 @@ function main() {
         }
         allData = allData.concat(data);
     }
-    
+
     process.chdir(originalCwd);
-    
+
     if (sigintCaught) {
         console.error("\nAnalysis was interrupted. The results may be incomplete.");
     }
@@ -460,49 +453,6 @@ function getLineBlameForFile(file: string, repoName: string): LineBlame[] {
     return lineInfos.map(info => ({ ...info, filePath: file, repositoryName: repoName, totalLinesInFile }));
 }
 
-// --- Output Generation ---
-
-/**
- * Aggregates raw blame records into per-user statistics for the HTML report.
- */
-function aggregateData(blameData: LineBlame[], dayBuckets: number[]): AggregatedStats[] {
-    const userStats = new Map<string, AggregatedStats>();
-    const now = Math.floor(Date.now() / 1000);
-    
-    // Create sorted time boundaries from largest to smallest
-    const timeBoundaries = dayBuckets
-        .sort((a, b) => a - b)
-        .map(days => now - days * 24 * 60 * 60);
-
-    for (const item of blameData) {
-        if (!userStats.has(item.username)) {
-            userStats.set(item.username, {
-                username: item.username,
-                totalValue: 0,
-                bucketValues: Array(dayBuckets.length + 1).fill(0), // +1 for the "Older" bucket
-            });
-        }
-        const stats = userStats.get(item.username)!;
-        stats.totalValue++;
-
-        let bucketed = false;
-        for (let i = 0; i < timeBoundaries.length; i++) {
-            if (item.time >= timeBoundaries[i]) {
-                stats.bucketValues[i]++;
-                bucketed = true;
-                break;
-            }
-        }
-
-        if (!bucketed) {
-            stats.bucketValues[dayBuckets.length]++; // Belongs in the "Older" bucket
-        }
-    }
-
-    // Convert map to array and sort
-    return Array.from(userStats.values()).sort((a, b) => b.totalValue - a.totalValue);
-}
-
 /**
  * Prints the collected data in CSV format to the console.
  */
@@ -511,181 +461,6 @@ function printCsv(records: BlameRecord[]) {
     for (const record of records) {
         console.log(`${record.repositoryName},"${record.filePath}","${record.fileName}",${record.username},${record.linesForCommitter},${record.totalLines}`);
     }
-}
-
-function getBucketLabel(dayBuckets: number[], index: number): string {
-    if (index === 0) {
-        return `< ${dayBuckets[0]} days`;
-    }
-    if (index < dayBuckets.length) {
-        return `${dayBuckets[index - 1] + 1} - ${dayBuckets[index]} days`;
-    }
-    return 'Older';
-}
-
-/**
- * Generates a self-contained HTML report file with charts.
- */
-function generateHtmlReport(data: AggregatedStats[], outputFile: string, originalCwd: string, dayBuckets: number[]) {
-    const topN = 20; // Show top N users in charts
-    const chartData = data.slice(0, topN);
-    const labels = JSON.stringify(chartData.map(u => u.username));
-    
-    const bucketColors = [
-        'rgba(214, 40, 40, 0.7)',  // Red
-        'rgba(247, 127, 0, 0.7)',  // Orange
-        'rgba(252, 191, 73, 0.7)', // Yellow
-        'rgba(168, 218, 142, 0.7)',// Light Green
-        'rgba(75, 192, 192, 0.7)', // Teal
-        'rgba(54, 162, 235, 0.7)', // Blue
-        'rgba(153, 102, 255, 0.7)',// Purple
-        'rgba(201, 203, 207, 0.7)' // Grey
-    ];
-
-    const datasets = dayBuckets.map((_, i) => ({
-        label: getBucketLabel(dayBuckets, i),
-        data: chartData.map(d => d.bucketValues[i]),
-        backgroundColor: bucketColors[i % bucketColors.length],
-    }));
-    // Add the "Older" dataset
-    datasets.push({
-        label: 'Older',
-        data: chartData.map(d => d.bucketValues[dayBuckets.length]),
-        backgroundColor: bucketColors[dayBuckets.length % bucketColors.length],
-    });
-
-    const tableHeaderLabel = 'Total';
-    const chartTitleLabel = 'Contributions';
-
-    const tableHeaders = dayBuckets.map((_, i) => `<th class="num">${getBucketLabel(dayBuckets, i)}</th>`).join('') + `<th class="num">Older</th>`;
-
-    const tableRows = data.map(u => {
-        const bucketCells = u.bucketValues.map(val => `<td class="num">${val.toLocaleString()}</td>`).join('');
-        return `
-        <tr>
-            <td>${u.username}</td>
-            <td class="num">${u.totalValue.toLocaleString()}</td>
-            ${bucketCells}
-        </tr>
-    `}).join('');
-    
-    const finalOutputPath = path.join(originalCwd, outputFile);
-
-    const htmlTemplate = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Git Blame Statistics</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #f8f9fa; color: #212529; }
-        .container { max-width: 900px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.05); }
-        h1, h2 { border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
-        .chart-container { margin-top: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 30px; }
-        th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; white-space: nowrap; }
-        th.num, td.num { text-align: right; }
-        thead { background-color: #e9ecef; }
-        tbody tr:nth-child(odd) { background-color: #f8f9fa; }
-        tbody tr:hover { background-color: #e9ecef; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Git Contribution Statistics</h1>
-        <div class="chart-container">
-            <h2>${chartTitleLabel} per Author (Top ${topN})</h2>
-            <canvas id="mainChart"></canvas>
-        </div>
-        <h2>All Author Stats</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Author</th>
-                    <th class="num">${tableHeaderLabel}</th>
-                    ${tableHeaders}
-                </tr>
-            </thead>
-            <tbody>
-                ${tableRows}
-            </tbody>
-        </table>
-    </div>
-    <script>
-        const chartData = ${JSON.stringify(chartData)};
-        const userMap = new Map(chartData.map(u => [u.username, u]));
-
-        const ctx = document.getElementById('mainChart').getContext('2d');
-        const mainChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: ${labels},
-                datasets: ${JSON.stringify(datasets)}
-            },
-            options: { 
-                indexAxis: 'y', 
-                scales: { 
-                    x: { stacked: true, beginAtZero: true },
-                    y: { 
-                        stacked: true,
-                        ticks: { autoSkip: false }
-                    } 
-                },
-                plugins: {
-                    legend: {
-                        onClick: (e, legendItem, legend) => {
-                            Chart.defaults.plugins.legend.onClick(e, legendItem, legend);
-
-                            const chart = legend.chart;
-                            const visibilities = chart.data.datasets.map((_, i) => chart.isDatasetVisible(i));
-                            const usersToSort = chart.data.labels.map(label => userMap.get(label));
-
-                            usersToSort.sort((a, b) => {
-                                let totalA = 0;
-                                let totalB = 0;
-                                
-                                for (let i = 0; i < visibilities.length; i++) {
-                                    if (visibilities[i]) {
-                                        totalA += a.bucketValues[i] || 0;
-                                        totalB += b.bucketValues[i] || 0;
-                                    }
-                                }
-
-                                return totalB - totalA;
-                            });
-                            
-                            chart.data.labels = usersToSort.map(u => u.username);
-                            chart.data.datasets.forEach((dataset, i) => {
-                                dataset.data = usersToSort.map(u => u.bucketValues[i]);
-                            });
-                            
-                            chart.update();
-                        }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                let label = context.dataset.label || '';
-                                if (label) {
-                                    label += ': ';
-                                }
-                                if (context.parsed.x !== null) {
-                                    label += context.parsed.x.toLocaleString();
-                                }
-                                return label;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    </script>
-</body>
-</html>`;
-
-    fs.writeFileSync(finalOutputPath, htmlTemplate);
 }
 
 // --- Entry Point ---
