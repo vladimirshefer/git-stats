@@ -82,13 +82,8 @@ interface LineBlame {
 
 interface AggregatedStats {
     username: string;
-    last7Days: number;
-    last30Days: number;
-    last365Days: number;
-    last5Years: number;
-    last10Years: number;
-    older: number;
     totalValue: number;
+    bucketValues: number[];
 }
 
 // Kept for CSV output compatibility
@@ -108,6 +103,7 @@ interface CliArgs {
     filenameGlobs?: string[];
     excludeGlobs?: string[];
     granularity: 'line' | 'file';
+    dayBuckets: number[];
 }
 
 // --- Main Application Logic ---
@@ -117,12 +113,12 @@ function main() {
     const { data, repoRoot, originalCwd } = gatherStats(args);
 
     if (args.outputFormat === 'html') {
-        const aggregatedData = aggregateData(data);
+        const aggregatedData = aggregateData(data, args.dayBuckets);
         const htmlFile = args.htmlOutputFile || 'git-blame-stats-report.html';
-        generateHtmlReport(aggregatedData, htmlFile, originalCwd);
+        generateHtmlReport(aggregatedData, htmlFile, originalCwd, args.dayBuckets);
         console.log(`HTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
-        // Note: CSV output is not granularity-aware in this version.
+        // Note: CSV output does not use dynamic day buckets in this version.
         const records = aggregateForCsv(data);
         printCsv(records, repoRoot);
     }
@@ -133,8 +129,7 @@ function main() {
  */
 function aggregateForCsv(blameData: LineBlame[]): BlameRecord[] {
     const fileUserLines = new Map<string, Map<string, number>>();
-    const fileTotalLines = new Map<string, number>();
-
+    
     for (const item of blameData) {
         if (!fileUserLines.has(item.filePath)) {
             fileUserLines.set(item.filePath, new Map<string, number>());
@@ -143,25 +138,24 @@ function aggregateForCsv(blameData: LineBlame[]): BlameRecord[] {
         userLines.set(item.username, (userLines.get(item.username) || 0) + 1);
     }
 
-    // Get total line counts for each file that has blame info
-    for (const filePath of fileUserLines.keys()) {
-        try {
-            const totalLines = fs.readFileSync(filePath, 'utf-8').split('\n').length;
-            fileTotalLines.set(filePath, totalLines);
-        } catch (e) {
-            fileTotalLines.set(filePath, 0); // File might not be accessible anymore
-        }
-    }
-
     const records: BlameRecord[] = [];
     for (const [filePath, userLines] of fileUserLines.entries()) {
+        // In file granularity, each user should only have one entry per file.
+        // In line granularity, we sum them up. The logic holds for both.
+        let totalLinesInFile = 0;
+        if (fs.existsSync(filePath)) {
+            try {
+                totalLinesInFile = fs.readFileSync(filePath, 'utf-8').split('\n').length;
+            } catch (e) { /* ignore read errors */ }
+        }
+
         for (const [username, linesForCommitter] of userLines.entries()) {
             records.push({
                 filePath,
                 fileName: path.basename(filePath),
                 username,
                 linesForCommitter,
-                totalLines: fileTotalLines.get(filePath) || 0
+                totalLines: totalLinesInFile
             });
         }
     }
@@ -179,6 +173,7 @@ function parseArgs(): CliArgs {
         excludeGlobs: [],
         outputFormat: 'csv', // Default to CSV
         granularity: 'line', // Default granularity
+        dayBuckets: [7, 30, 180, 365, 730, 1825], // Default buckets
     };
     
     for (let i = 0; i < cliArgs.length; i++) {
@@ -196,6 +191,15 @@ function parseArgs(): CliArgs {
                 result.granularity = value;
             } else {
                 console.error(`Invalid granularity: ${value}. Must be 'line' or 'file'.`);
+                process.exit(1);
+            }
+        } else if (arg.startsWith('--days=')) {
+            const values = arg.split('=')[1];
+            const parsedBuckets = values.split(',').map(d => parseInt(d.trim(), 10)).filter(d => !isNaN(d) && d > 0);
+            if (parsedBuckets.length > 0) {
+                result.dayBuckets = parsedBuckets.sort((a, b) => a - b); // Ensure buckets are sorted
+            } else {
+                console.error('Invalid --days format. Must be a comma-separated list of positive numbers.');
                 process.exit(1);
             }
         }
@@ -334,43 +338,37 @@ function getLineBlameForFile(file: string): LineBlame[] {
 /**
  * Aggregates raw blame records into per-user statistics for the HTML report.
  */
-function aggregateData(blameData: LineBlame[]): AggregatedStats[] {
+function aggregateData(blameData: LineBlame[], dayBuckets: number[]): AggregatedStats[] {
     const userStats = new Map<string, AggregatedStats>();
     const now = Math.floor(Date.now() / 1000);
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60;
-    const thirtyDaysAgo = now - 30 * 24 * 60 * 60;
-    const oneYearAgo = now - 365 * 24 * 60 * 60;
-    const fiveYearsAgo = now - 5 * 365 * 24 * 60 * 60;
-    const tenYearsAgo = now - 10 * 365 * 24 * 60 * 60;
+    
+    // Create sorted time boundaries from largest to smallest
+    const timeBoundaries = dayBuckets
+        .sort((a, b) => a - b)
+        .map(days => now - days * 24 * 60 * 60);
 
     for (const item of blameData) {
         if (!userStats.has(item.username)) {
             userStats.set(item.username, {
                 username: item.username,
-                last7Days: 0,
-                last30Days: 0,
-                last365Days: 0,
-                last5Years: 0,
-                last10Years: 0,
-                older: 0,
-                totalValue: 0, 
+                totalValue: 0,
+                bucketValues: Array(dayBuckets.length + 1).fill(0), // +1 for the "Older" bucket
             });
         }
         const stats = userStats.get(item.username)!;
         stats.totalValue++;
 
-        if (item.time >= sevenDaysAgo) {
-            stats.last7Days++;
-        } else if (item.time >= thirtyDaysAgo) {
-            stats.last30Days++;
-        } else if (item.time >= oneYearAgo) {
-            stats.last365Days++;
-        } else if (item.time >= fiveYearsAgo) {
-            stats.last5Years++;
-        } else if (item.time >= tenYearsAgo) {
-            stats.last10Years++;
-        } else {
-            stats.older++;
+        let bucketed = false;
+        for (let i = 0; i < timeBoundaries.length; i++) {
+            if (item.time >= timeBoundaries[i]) {
+                stats.bucketValues[i]++;
+                bucketed = true;
+                break;
+            }
+        }
+
+        if (!bucketed) {
+            stats.bucketValues[dayBuckets.length]++; // Belongs in the "Older" bucket
         }
     }
 
@@ -389,36 +387,61 @@ function printCsv(records: BlameRecord[], repoRoot: string) {
     }
 }
 
+function getBucketLabel(dayBuckets: number[], index: number): string {
+    if (index === 0) {
+        return `< ${dayBuckets[0]} days`;
+    }
+    if (index < dayBuckets.length) {
+        return `${dayBuckets[index - 1] + 1} - ${dayBuckets[index]} days`;
+    }
+    return 'Older';
+}
+
 /**
  * Generates a self-contained HTML report file with charts.
  */
-function generateHtmlReport(data: AggregatedStats[], outputFile: string, originalCwd: string) {
+function generateHtmlReport(data: AggregatedStats[], outputFile: string, originalCwd: string, dayBuckets: number[]) {
     const topN = 20; // Show top N users in charts
     const chartData = data.slice(0, topN);
     const labels = JSON.stringify(chartData.map(u => u.username));
     
-    const last7 = JSON.stringify(chartData.map(d => d.last7Days));
-    const last30 = JSON.stringify(chartData.map(d => d.last30Days));
-    const last365 = JSON.stringify(chartData.map(d => d.last365Days));
-    const last5Years = JSON.stringify(chartData.map(d => d.last5Years));
-    const last10Years = JSON.stringify(chartData.map(d => d.last10Years));
-    const older = JSON.stringify(chartData.map(d => d.older));
+    const bucketColors = [
+        'rgba(214, 40, 40, 0.7)',  // Red
+        'rgba(247, 127, 0, 0.7)',  // Orange
+        'rgba(252, 191, 73, 0.7)', // Yellow
+        'rgba(168, 218, 142, 0.7)',// Light Green
+        'rgba(75, 192, 192, 0.7)', // Teal
+        'rgba(54, 162, 235, 0.7)', // Blue
+        'rgba(153, 102, 255, 0.7)',// Purple
+        'rgba(201, 203, 207, 0.7)' // Grey
+    ];
+
+    const datasets = dayBuckets.map((_, i) => ({
+        label: getBucketLabel(dayBuckets, i),
+        data: chartData.map(d => d.bucketValues[i]),
+        backgroundColor: bucketColors[i % bucketColors.length],
+    }));
+    // Add the "Older" dataset
+    datasets.push({
+        label: 'Older',
+        data: chartData.map(d => d.bucketValues[dayBuckets.length]),
+        backgroundColor: bucketColors[dayBuckets.length % bucketColors.length],
+    });
 
     const tableHeaderLabel = 'Total';
     const chartTitleLabel = 'Contributions';
 
-    const tableRows = data.map(u => `
+    const tableHeaders = dayBuckets.map((_, i) => `<th class="num">${getBucketLabel(dayBuckets, i)}</th>`).join('') + `<th class="num">Older</th>`;
+
+    const tableRows = data.map(u => {
+        const bucketCells = u.bucketValues.map(val => `<td class="num">${val.toLocaleString()}</td>`).join('');
+        return `
         <tr>
             <td>${u.username}</td>
             <td class="num">${u.totalValue.toLocaleString()}</td>
-            <td class="num">${u.last7Days.toLocaleString()}</td>
-            <td class="num">${u.last30Days.toLocaleString()}</td>
-            <td class="num">${u.last365Days.toLocaleString()}</td>
-            <td class="num">${u.last5Years.toLocaleString()}</td>
-            <td class="num">${u.last10Years.toLocaleString()}</td>
-            <td class="num">${u.older.toLocaleString()}</td>
+            ${bucketCells}
         </tr>
-    `).join('');
+    `}).join('');
     
     const finalOutputPath = path.join(originalCwd, outputFile);
 
@@ -436,7 +459,7 @@ function generateHtmlReport(data: AggregatedStats[], outputFile: string, origina
         h1, h2 { border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
         .chart-container { margin-top: 20px; }
         table { width: 100%; border-collapse: collapse; margin-top: 30px; }
-        th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; }
+        th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; white-space: nowrap; }
         th.num, td.num { text-align: right; }
         thead { background-color: #e9ecef; }
         tbody tr:nth-child(odd) { background-color: #f8f9fa; }
@@ -456,12 +479,7 @@ function generateHtmlReport(data: AggregatedStats[], outputFile: string, origina
                 <tr>
                     <th>Author</th>
                     <th class="num">${tableHeaderLabel}</th>
-                    <th class="num">< 7 days</th>
-                    <th class="num">8-30 days</th>
-                    <th class="num">< 1 year</th>
-                    <th class="num">Last 5 Years</th>
-                    <th class="num">Last 10 Years</th>
-                    <th class="num">Older</th>
+                    ${tableHeaders}
                 </tr>
             </thead>
             <tbody>
@@ -478,14 +496,7 @@ function generateHtmlReport(data: AggregatedStats[], outputFile: string, origina
             type: 'bar',
             data: {
                 labels: ${labels},
-                datasets: [
-                    { label: '< 7 days', data: ${last7}, backgroundColor: 'rgba(214, 40, 40, 0.7)' },
-                    { label: '8-30 days', data: ${last30}, backgroundColor: 'rgba(247, 127, 0, 0.7)' },
-                    { label: '< 1 year', data: ${last365}, backgroundColor: 'rgba(252, 191, 73, 0.7)' },
-                    { label: 'Last 5 Years', data: ${last5Years}, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
-                    { label: 'Last 10 Years', data: ${last10Years}, backgroundColor: 'rgba(153, 102, 255, 0.7)' },
-                    { label: 'Older', data: ${older}, backgroundColor: 'rgba(201, 203, 207, 0.7)' }
-                ]
+                datasets: ${JSON.stringify(datasets)}
             },
             options: { 
                 indexAxis: 'y', 
@@ -499,7 +510,6 @@ function generateHtmlReport(data: AggregatedStats[], outputFile: string, origina
                 plugins: {
                     legend: {
                         onClick: (e, legendItem, legend) => {
-                            // Default behavior to toggle visibility
                             Chart.defaults.plugins.legend.onClick(e, legendItem, legend);
 
                             const chart = legend.chart;
@@ -509,30 +519,21 @@ function generateHtmlReport(data: AggregatedStats[], outputFile: string, origina
                             usersToSort.sort((a, b) => {
                                 let totalA = 0;
                                 let totalB = 0;
-                                if (visibilities[0]) totalA += a.last7Days;
-                                if (visibilities[1]) totalA += a.last30Days;
-                                if (visibilities[2]) totalA += a.last365Days;
-                                if (visibilities[3]) totalA += a.last5Years;
-                                if (visibilities[4]) totalA += a.last10Years;
-                                if (visibilities[5]) totalA += a.older;
-
-                                if (visibilities[0]) totalB += b.last7Days;
-                                if (visibilities[1]) totalB += b.last30Days;
-                                if (visibilities[2]) totalB += b.last365Days;
-                                if (visibilities[3]) totalB += b.last5Years;
-                                if (visibilities[4]) totalB += b.last10Years;
-                                if (visibilities[5]) totalB += b.older;
+                                
+                                for (let i = 0; i < visibilities.length; i++) {
+                                    if (visibilities[i]) {
+                                        totalA += a.bucketValues[i] || 0;
+                                        totalB += b.bucketValues[i] || 0;
+                                    }
+                                }
 
                                 return totalB - totalA;
                             });
                             
                             chart.data.labels = usersToSort.map(u => u.username);
-                            chart.data.datasets[0].data = usersToSort.map(u => u.last7Days);
-                            chart.data.datasets[1].data = usersToSort.map(u => u.last30Days);
-                            chart.data.datasets[2].data = usersToSort.map(u => u.last365Days);
-                            chart.data.datasets[3].data = usersToSort.map(u => u.last5Years);
-                            chart.data.datasets[4].data = usersToSort.map(u => u.last10Years);
-                            chart.data.datasets[5].data = usersToSort.map(u => u.older);
+                            chart.data.datasets.forEach((dataset, i) => {
+                                dataset.data = usersToSort.map(u => u.bucketValues[i]);
+                            });
                             
                             chart.update();
                         }
