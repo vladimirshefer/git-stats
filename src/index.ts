@@ -17,9 +17,9 @@ import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
 import {RawLineStat} from "./base/RawLineStat";
 import {isGitRepo} from "./base/utils";
-import {csvEscape} from './output/csv';
-import {parseArgs, AggregatedData, CliArgs} from './cli/parseArgs';
-import { Config, loadConfig } from './input/config';
+import {streamToCsv} from './output/csv';
+import {AggregatedData, CliArgs, parseArgs} from './cli/parseArgs';
+import {Config, loadConfig} from './input/config';
 
 // --- General Types ---
 let sigintCaught = false;
@@ -195,23 +195,6 @@ async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, config
     return stats;
 }
 
-/**
- * Stage 4: Consume the stream and format as CSV.
- */
-async function streamToCsv(statStream: AsyncGenerator<RawLineStat>) {
-    console.log('repository_name,file_path,language,username,commit_timestamp');
-    for await (const record of statStream) {
-        if (sigintCaught) break;
-        console.log([
-            csvEscape(record.repoName),
-            csvEscape(record.filePath),
-            csvEscape(record.lang),
-            csvEscape(record.user),
-            csvEscape(record.time),
-        ].join(','));
-    }
-}
-
 // --- Argument Parsing ---
 // parseArgs moved to src/cli/parseArgs.ts
 
@@ -249,7 +232,7 @@ async function main() {
         console.error("No git repositories found to analyze.");
         process.exit(0);
     }
-    
+
     console.error(`Found ${repoPathsToProcess.length} repositories to analyze:`);
     repoPathsToProcess.forEach(p => console.error(`- ${p || '.'}`));
 
@@ -261,12 +244,15 @@ async function main() {
         if (sigintCaught) console.error("\nAnalysis was interrupted. HTML report may be incomplete.");
 
         // Stage 4 for HTML
-        const htmlFile = config.htmlOutputFile || 'git-blame-stats-report.html';
+        const htmlFile = config.htmlOutputFile || 'git-stats.html';
         // NOTE: generateHtmlReport expects CliArgs; passing config as it's compatible on used fields
         generateHtmlReport(aggregatedData, htmlFile, originalCwd, config as unknown as CliArgs);
         console.log(`\nHTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
-        await streamToCsv(statStream); // Stage 4 for CSV
+        await streamToCsv(
+            ["repositoryName", "filePath", "language", "username", "commitTimestamp"],
+            statStream
+        );
         if (sigintCaught) console.error("\nAnalysis was interrupted. CSV output may be incomplete.");
     }
 }
