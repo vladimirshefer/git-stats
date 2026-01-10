@@ -20,6 +20,7 @@ import {isGitRepo} from "./base/utils";
 import {streamToCsv} from './output/csv';
 import {AggregatedData, CliArgs, parseArgs} from './cli/parseArgs';
 import {Config, loadConfig} from './input/config';
+import {extractRawStatsForFile} from "./git";
 
 // --- General Types ---
 let sigintCaught = false;
@@ -141,24 +142,6 @@ async function* discoverAndExtract(repoPaths: string[], config: Config): AsyncGe
         }
         process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
         console.error(`Analysis complete for '${repoName}'.`);
-    }
-}
-
-function* extractRawStatsForFile(file: string, repoName: string, repoRoot: string): Generator<RawLineStat> {
-    const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { cwd: repoRoot, maxBuffer: 1024 * 1024 * 50 }).toString();
-    const blameLines = blameOutput.trim().split('\n');
-    const lang = path.extname(file) || 'Other';
-    
-    let currentUser = '', currentTime = 0;
-
-    for (const line of blameLines) {
-        if (line.startsWith('author ')) {
-            currentUser = line.substring('author '.length).replace(/^<|>$/g, '');
-        } else if (line.startsWith('committer-time ')) {
-            currentTime = parseInt(line.substring('committer-time '.length), 10);
-        } else if (line.startsWith('\t') && currentUser && currentTime) {
-            yield { repoName, filePath: file, lang, user: currentUser, time: currentTime };
-        }
     }
 }
 
