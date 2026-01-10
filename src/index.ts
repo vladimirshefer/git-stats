@@ -11,26 +11,16 @@
  * 4.  **Output Formatting:** Renders the aggregated data as an HTML report or a CSV file.
  */
 
-import { execSync } from 'child_process';
+import {execSync} from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateHtmlReport } from './report-template';
+import {generateHtmlReport} from './output/report_template';
+import {RawLineStat} from "./base/RawLineStat";
+import {isGitRepo} from "./base/utils";
 
 // --- General Types ---
 let sigintCaught = false;
 
-// --- Stage 2: Raw Data Extraction Types ---
-interface RawLineStat {
-    repoName: string;
-    filePath: string;
-    lang: string;
-    user: string;
-    time: number; // Unix timestamp
-}
-
-// --- Stage 3: Aggregation Types ---
-type PrimaryGrouping = 'user' | 'repo' | 'lang';
-type SecondaryGrouping = 'repo' | 'lang' | 'date';
 export interface AggregatedData {
     [primaryKey: string]: {
         [secondaryKey: string]: number;
@@ -45,44 +35,12 @@ export interface CliArgs {
     htmlOutputFile?: string;
     filenameGlobs?: string[];
     excludeGlobs?: string[];
-    groupBy: PrimaryGrouping;
-    thenBy: SecondaryGrouping;
+    groupBy: string;
+    thenBy: string;
     dayBuckets: number[];
 }
 
 // --- Utility Functions ---
-
-function getLanguage(filePath: string): string {
-    const extension = path.extname(filePath).toLowerCase();
-    const langMap: { [key: string]: string } = {
-        '.kt': 'Kotlin', '.kts': 'Kotlin Script',
-        '.js': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',
-        '.ts': 'TypeScript', '.mts': 'TypeScript', '.cts': 'TypeScript',
-        '.java': 'Java',
-        '.go': 'Go',
-        '.py': 'Python',
-        '.rb': 'Ruby',
-        '.rs': 'Rust',
-        '.cs': 'C#',
-        '.php': 'PHP',
-        '.cpp': 'C++', '.cxx': 'C++', '.cc': 'C++',
-        '.h': 'C/C++ Header', '.hpp': 'C++ Header',
-        '.c': 'C',
-        '.sql': 'SQL',
-        '.sh': 'Shell',
-        '.html': 'HTML',
-        '.css': 'CSS',
-        '.json': 'JSON',
-        '.xml': 'XML',
-        '.yml': 'YAML', '.yaml': 'YAML',
-        '.md': 'Markdown',
-    };
-    return langMap[extension] || path.extname(filePath) || 'Other';
-}
-
-function isGitRepo(dir: string): boolean {
-    return fs.existsSync(path.join(dir, '.git'));
-}
 
 function getDirectories(source: string): string[] {
     if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) return [];
@@ -125,7 +83,7 @@ async function* discoverAndExtract(repoPaths: string[], args: CliArgs): AsyncGen
             console.error(`Error: Could not find git repository at ${gitCommandPath}. Skipping.`);
             continue;
         }
-        
+
         const repoName = path.basename(repoRoot);
         process.chdir(repoRoot);
 
@@ -170,7 +128,7 @@ async function* discoverAndExtract(repoPaths: string[], args: CliArgs): AsyncGen
 function* extractRawStatsForFile(file: string, repoName: string): Generator<RawLineStat> {
     const blameOutput = execSync(`git blame --line-porcelain -- "${file}"`, { maxBuffer: 1024 * 1024 * 50 }).toString();
     const blameLines = blameOutput.trim().split('\n');
-    const lang = getLanguage(file);
+    const lang = path.extname(file) || 'Other';
     
     let currentUser = '', currentTime = 0;
 
@@ -207,7 +165,7 @@ async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, args: 
     };
 
     for await (const item of statStream) {
-        const primaryKey: PrimaryGrouping = item[groupBy];
+        const primaryKey: string = item[groupBy];
         const secondaryKey = getSecondaryKey(item);
 
         if (!stats[primaryKey]) stats[primaryKey] = {};
@@ -249,10 +207,10 @@ function parseArgs(): CliArgs {
             const nextArg = cliArgs[i + 1];
             if (nextArg && !nextArg.startsWith('-')) { result.htmlOutputFile = nextArg; i++; }
         } else if (arg === '--group-by') {
-            const nextArg = cliArgs[i + 1] as PrimaryGrouping;
+            const nextArg = cliArgs[i + 1] as string;
             if (nextArg && ['user', 'repo', 'lang'].includes(nextArg)) { result.groupBy = nextArg; i++; }
         } else if (arg === '--then-by') {
-            const nextArg = cliArgs[i + 1] as SecondaryGrouping;
+            const nextArg = cliArgs[i + 1] as string;
             if (nextArg && ['repo', 'lang', 'date'].includes(nextArg)) { result.thenBy = nextArg; i++; }
         } else if (arg.startsWith('--days=')) {
             const values = arg.split('=')[1];
@@ -271,7 +229,7 @@ function parseArgs(): CliArgs {
             if (!result.targetPath) result.targetPath = arg;
         }
     }
-    
+
     result.targetPath = result.targetPath || '.';
     return result as CliArgs;
 }
