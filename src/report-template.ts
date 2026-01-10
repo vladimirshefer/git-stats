@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { AggregatedData, CliArgs } from './blame-stats';
-import htmlTemplate from './report-template.html';
+import { AggregatedData, CliArgs } from '.';
+import htmlTemplate from '../report-template.html';
 
 /**
  * Generates a self-contained, dynamic HTML report file with charts.

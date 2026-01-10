@@ -14,7 +14,7 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateHtmlReport } from './report-template'; 
+import { generateHtmlReport } from './report-template';
 
 // --- General Types ---
 let sigintCaught = false;
@@ -38,7 +38,7 @@ export interface AggregatedData {
 }
 
 // --- CLI Argument Types ---
-interface CliArgs {
+export interface CliArgs {
     targetPath: string;
     additionalRepoPaths: string[];
     outputFormat: 'csv' | 'html';
@@ -189,7 +189,7 @@ function* extractRawStatsForFile(file: string, repoName: string): Generator<RawL
  * Stage 3: Aggregate raw stats from the stream based on grouping dimensions.
  */
 async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, args: CliArgs): Promise<AggregatedData> {
-    const { groupBy, thenBy, dayBuckets } = args;
+    const { groupBy, thenBy, dayBuckets }: CliArgs = args;
     const stats: AggregatedData = {};
     const now = Date.now() / 1000;
 
@@ -205,9 +205,9 @@ async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, args: 
                 return 'Older';
         }
     };
-    
+
     for await (const item of statStream) {
-        const primaryKey = item[groupBy];
+        const primaryKey: PrimaryGrouping = item[groupBy];
         const secondaryKey = getSecondaryKey(item);
 
         if (!stats[primaryKey]) stats[primaryKey] = {};
