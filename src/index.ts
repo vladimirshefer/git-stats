@@ -19,6 +19,7 @@ import {RawLineStat} from "./base/RawLineStat";
 import {isGitRepo} from "./base/utils";
 import {csvEscape} from './output/csv';
 import {parseArgs, AggregatedData, CliArgs} from './cli/parseArgs';
+import { Config, loadConfig } from './input/config';
 
 // --- General Types ---
 let sigintCaught = false;
@@ -46,7 +47,27 @@ function getDirectories(source: string): string[] {
  * Stage 1 & 2 combined: Discover files and stream raw blame statistics.
  * This is the main generator function for the pipeline.
  */
-async function* discoverAndExtract(repoPaths: string[], args: CliArgs): AsyncGenerator<RawLineStat> {
+async function* readCacheForRepo(repoRoot: string, repoName: string, cacheFileName: string): AsyncGenerator<RawLineStat> {
+    const cachePath = path.isAbsolute(cacheFileName) ? cacheFileName : path.join(repoRoot, cacheFileName);
+    if (!fs.existsSync(cachePath)) {
+        console.error(`Cache file not found: ${cachePath}. Skipping.`);
+        return;
+    }
+    const content = fs.readFileSync(cachePath, 'utf8');
+    const lines = content.split(/\r?\n/);
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+            const obj = JSON.parse(line);
+            // Basic validation of required fields
+            if (obj && obj.repoName && obj.filePath && obj.user && obj.time) {
+                yield obj as RawLineStat;
+            }
+        } catch {/* ignore bad lines */}
+    }
+}
+
+async function* discoverAndExtract(repoPaths: string[], config: Config): AsyncGenerator<RawLineStat> {
     for (const repoPath of repoPaths) {
         if (sigintCaught) break;
         console.error(`\nProcessing repository: ${repoPath || '.'}`);
@@ -69,39 +90,57 @@ async function* discoverAndExtract(repoPaths: string[], args: CliArgs): AsyncGen
         }
 
         const repoName = path.basename(repoRoot);
-        
-            // Stage 1: File Discovery
-            const finalTargetPath = path.relative(repoRoot, discoveryPath);
-            const includePathspecs = (args.filenameGlobs && args.filenameGlobs.length > 0) ? args.filenameGlobs.map(g => `'${g}'`).join(' ') : '';
-            const excludePathspecs = (args.excludeGlobs && args.excludeGlobs.length > 0) ? args.excludeGlobs.map(g => `':!${g}'`).join(' ') : '';
-            const filesCommand = `git ls-files -- "${finalTargetPath || '.'}" ${includePathspecs} ${excludePathspecs}`;
-            const filesOutput = execSync(filesCommand, { cwd: repoRoot, maxBuffer: 1024 * 1024 * 50 }).toString().trim();
-            const files = filesOutput ? filesOutput.split('\n') : [];
 
-            console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
+        // If reading from cache, prefer that path and skip extraction
+        if (config.cache.read) {
+            yield* readCacheForRepo(repoRoot, repoName, config.cache.fileName || '.gitstats-cache.jsonl');
+            continue;
+        }
 
-            // Stage 2: Raw Data Extraction (Streaming)
+        // Stage 1: File Discovery
+        const finalTargetPath = path.relative(repoRoot, discoveryPath);
+        const includePathspecs = (config.filenameGlobs && config.filenameGlobs.length > 0) ? config.filenameGlobs.map(g => `'${g}'`).join(' ') : '';
+        const excludePathspecs = (config.excludeGlobs && config.excludeGlobs.length > 0) ? config.excludeGlobs.map(g => `':!${g}'`).join(' ') : '';
+        const filesCommand = `git ls-files -- "${finalTargetPath || '.'}" ${includePathspecs} ${excludePathspecs}`;
+        const filesOutput = execSync(filesCommand, { cwd: repoRoot, maxBuffer: 1024 * 1024 * 50 }).toString().trim();
+        const files = filesOutput ? filesOutput.split('\n') : [];
+
+        console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
+
+        // Stage 2: Raw Data Extraction (Streaming)
+        // Optional cache writer
+        const maybeCachePath = config.cache.fileName ? (path.isAbsolute(config.cache.fileName) ? config.cache.fileName : path.join(repoRoot, config.cache.fileName)) : undefined;
+        const cacheStream = config.cache.write && maybeCachePath ? fs.createWriteStream(maybeCachePath, { flags: 'w' }) : null;
+        try {
             for (let i = 0; i < files.length; i++) {
                 if (sigintCaught) break;
                 const file = files[i];
                 const progressMessage = `[${i + 1}/${files.length}] Analyzing: ${file}`;
                 process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
-                
+
                 if (!file) continue;
                 const absPath = path.join(repoRoot, file);
                 let stat: fs.Stats | null = null;
                 try { stat = fs.statSync(absPath); } catch { stat = null; }
                 if (!stat || !stat.isFile() || stat.size === 0) continue;
-                
+
                 try {
-                    yield* extractRawStatsForFile(file, repoName, repoRoot);
+                    for (const item of extractRawStatsForFile(file, repoName, repoRoot)) {
+                        if (cacheStream) {
+                            try { cacheStream.write(JSON.stringify(item) + '\n'); } catch {/* ignore write errors */}
+                        }
+                        yield item;
+                    }
                 } catch (e: any) {
                     if (e.signal === 'SIGINT') sigintCaught = true;
                     // Silently skip files that error
                 }
             }
-            process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
-            console.error(`Analysis complete for '${repoName}'.`);
+        } finally {
+            if (cacheStream) cacheStream.end();
+        }
+        process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
+        console.error(`Analysis complete for '${repoName}'.`);
     }
 }
 
@@ -126,8 +165,8 @@ function* extractRawStatsForFile(file: string, repoName: string, repoRoot: strin
 /**
  * Stage 3: Aggregate raw stats from the stream based on grouping dimensions.
  */
-async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, args: CliArgs): Promise<AggregatedData> {
-    const { groupBy, thenBy, dayBuckets }: CliArgs = args;
+async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, config: Config): Promise<AggregatedData> {
+    const { groupBy, thenBy, dayBuckets } = config;
     const stats: AggregatedData = {};
     const now = Date.now() / 1000;
 
@@ -185,19 +224,20 @@ async function main() {
     });
 
     const args = parseArgs();
+    const config: Config = loadConfig(args);
     const originalCwd = process.cwd();
-    let repoPathsToProcess: string[] = [...args.additionalRepoPaths];
+    let repoPathsToProcess: string[] = [...config.additionalRepoPaths];
 
     // --- Repo Discovery ---
-    const targetFullPath = path.resolve(originalCwd, args.targetPath);
+    const targetFullPath = path.resolve(originalCwd, config.targetPath);
     if (!fs.existsSync(targetFullPath)) {
         console.error(`Error: Path does not exist: ${targetFullPath}`);
         process.exit(1);
     }
     if (isGitRepo(targetFullPath)) {
-        repoPathsToProcess.push(args.targetPath);
+        repoPathsToProcess.push(config.targetPath);
     } else if (fs.statSync(targetFullPath).isDirectory()) {
-        console.error(`'${args.targetPath}' is not a git repository. Searching for git repositories within...`);
+        console.error(`'${config.targetPath}' is not a git repository. Searching for git repositories within...`);
         const foundRepos = getDirectories(targetFullPath)
             .flatMap(dir => isGitRepo(dir) ? [dir] : getDirectories(dir).filter(isGitRepo))
             .map(repoPath => path.relative(originalCwd, repoPath));
@@ -214,15 +254,16 @@ async function main() {
     repoPathsToProcess.forEach(p => console.error(`- ${p || '.'}`));
 
     // --- Pipeline Execution ---
-    const statStream = discoverAndExtract(repoPathsToProcess, args);
+    const statStream = discoverAndExtract(repoPathsToProcess, config);
 
-    if (args.outputFormat === 'html') {
-        const aggregatedData = await aggregateRawStats(statStream, args); // Stage 3
+    if (config.outputFormat === 'html') {
+        const aggregatedData = await aggregateRawStats(statStream, config); // Stage 3
         if (sigintCaught) console.error("\nAnalysis was interrupted. HTML report may be incomplete.");
 
         // Stage 4 for HTML
-        const htmlFile = args.htmlOutputFile || 'git-blame-stats-report.html';
-        generateHtmlReport(aggregatedData, htmlFile, originalCwd, args);
+        const htmlFile = config.htmlOutputFile || 'git-blame-stats-report.html';
+        // NOTE: generateHtmlReport expects CliArgs; passing config as it's compatible on used fields
+        generateHtmlReport(aggregatedData, htmlFile, originalCwd, config as unknown as CliArgs);
         console.log(`\nHTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
         await streamToCsv(statStream); // Stage 4 for CSV

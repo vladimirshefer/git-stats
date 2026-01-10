@@ -15,6 +15,11 @@ export interface CliArgs {
   groupBy: GroupBy;
   thenBy: ThenBy;
   dayBuckets: number[];
+  // new options for config + cache
+  configPath?: string;
+  useCache?: boolean; // read cache instead of running blame
+  writeCache?: boolean; // write cache while processing
+  cacheFile?: string; // override cache file name or absolute path
 }
 
 /**
@@ -38,6 +43,16 @@ export function parseArgs(): CliArgs {
       result.outputFormat = 'html';
       const nextArg = cliArgs[i + 1];
       if (nextArg && !nextArg.startsWith('-')) { result.htmlOutputFile = nextArg; i++; }
+    } else if (arg === '--config') {
+      const nextArg = cliArgs[i + 1];
+      if (nextArg && !nextArg.startsWith('-')) { result.configPath = nextArg; i++; }
+    } else if (arg === '--use-cache') {
+      result.useCache = true;
+    } else if (arg === '--write-cache') {
+      result.writeCache = true;
+    } else if (arg === '--cache-file') {
+      const nextArg = cliArgs[i + 1];
+      if (nextArg && !nextArg.startsWith('-')) { result.cacheFile = nextArg; i++; }
     } else if (arg === '--group-by') {
       const nextArg = cliArgs[i + 1] as GroupBy;
       if (nextArg && ['user', 'repo', 'lang'].includes(nextArg)) { result.groupBy = nextArg; i++; }
