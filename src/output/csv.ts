@@ -14,7 +14,7 @@ export async function streamToCsv<T extends Record<string, any>>(
   console.log(headers.map(h => csvEscape(h)).join(','));
   for await (const record of statStream) {
     console.log(
-        headers.map(h => csvEscape(record[h])).join(',')
+        headers.map(h => csvEscape(record[h] ?? "")).join(',')
     );
   }
 }

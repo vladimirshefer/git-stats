@@ -21,6 +21,8 @@ import {streamToCsv} from './output/csv';
 import {AggregatedData, CliArgs, parseArgs} from './cli/parseArgs';
 import {Config, loadConfig} from './input/config';
 import {extractRawStatsForFile} from "./git";
+import {InMemoryFileSystemImpl, VirtualFileSystem} from "./vfs";
+import {AsyncGeneratorUtil} from "./util/AsyncGeneratorUtil";
 
 // --- General Types ---
 let sigintCaught = false;
@@ -68,81 +70,86 @@ async function* readCacheForRepo(repoRoot: string, repoName: string, cacheFileNa
     }
 }
 
-async function* discoverAndExtract(repoPaths: string[], config: Config): AsyncGenerator<RawLineStat> {
-    for (const repoPath of repoPaths) {
-        if (sigintCaught) break;
-        console.error(`\nProcessing repository: ${repoPath || '.'}`);
 
-        const originalCwd = process.cwd();
-        const discoveryPath = path.resolve(originalCwd, repoPath);
-        if (!fs.existsSync(discoveryPath)) {
-            console.error(`Error: Path does not exist: ${discoveryPath}. Skipping.`);
-            continue;
-        }
+async function* doProcess1(repoPath: string, config: Config): AsyncGenerator<RawLineStat> {
+    console.error(`\nProcessing repository: ${repoPath || '.'}`);
 
-        const gitCommandPath = fs.statSync(discoveryPath).isDirectory() ? discoveryPath : path.dirname(discoveryPath);
-
-        let repoRoot: string;
-        try {
-            repoRoot = execSync('git rev-parse --show-toplevel', { cwd: gitCommandPath, stdio: 'pipe' }).toString().trim();
-        } catch (e) {
-            console.error(`Error: Could not find git repository at ${gitCommandPath}. Skipping.`);
-            continue;
-        }
-
-        const repoName = path.basename(repoRoot);
-
-        // If reading from cache, prefer that path and skip extraction
-        if (config.cache.read) {
-            yield* readCacheForRepo(repoRoot, repoName, config.cache.fileName || '.gitstats-cache.jsonl');
-            continue;
-        }
-
-        // Stage 1: File Discovery
-        const finalTargetPath = path.relative(repoRoot, discoveryPath);
-        const includePathspecs = (config.filenameGlobs && config.filenameGlobs.length > 0) ? config.filenameGlobs.map(g => `'${g}'`).join(' ') : '';
-        const excludePathspecs = (config.excludeGlobs && config.excludeGlobs.length > 0) ? config.excludeGlobs.map(g => `':!${g}'`).join(' ') : '';
-        const filesCommand = `git ls-files -- "${finalTargetPath || '.'}" ${includePathspecs} ${excludePathspecs}`;
-        const filesOutput = execSync(filesCommand, { cwd: repoRoot, maxBuffer: 1024 * 1024 * 50 }).toString().trim();
-        const files = filesOutput ? filesOutput.split('\n') : [];
-
-        console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
-
-        // Stage 2: Raw Data Extraction (Streaming)
-        // Optional cache writer
-        const maybeCachePath = config.cache.fileName ? (path.isAbsolute(config.cache.fileName) ? config.cache.fileName : path.join(repoRoot, config.cache.fileName)) : undefined;
-        const cacheStream = config.cache.write && maybeCachePath ? fs.createWriteStream(maybeCachePath, { flags: 'w' }) : null;
-        try {
-            for (let i = 0; i < files.length; i++) {
-                if (sigintCaught) break;
-                const file = files[i];
-                const progressMessage = `[${i + 1}/${files.length}] Analyzing: ${file}`;
-                process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
-
-                if (!file) continue;
-                const absPath = path.join(repoRoot, file);
-                let stat: fs.Stats | null = null;
-                try { stat = fs.statSync(absPath); } catch { stat = null; }
-                if (!stat || !stat.isFile() || stat.size === 0) continue;
-
-                try {
-                    for (const item of extractRawStatsForFile(file, repoName, repoRoot)) {
-                        if (cacheStream) {
-                            try { cacheStream.write(JSON.stringify(item) + '\n'); } catch {/* ignore write errors */}
-                        }
-                        yield item;
-                    }
-                } catch (e: any) {
-                    if (e.signal === 'SIGINT') sigintCaught = true;
-                    // Silently skip files that error
-                }
-            }
-        } finally {
-            if (cacheStream) cacheStream.end();
-        }
-        process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
-        console.error(`Analysis complete for '${repoName}'.`);
+    const originalCwd = process.cwd();
+    const discoveryPath = path.resolve(originalCwd, repoPath);
+    if (!fs.existsSync(discoveryPath)) {
+        console.error(`Error: Path does not exist: ${discoveryPath}. Skipping.`);
+        return;
     }
+
+    const gitCommandPath = fs.statSync(discoveryPath).isDirectory() ? discoveryPath : path.dirname(discoveryPath);
+
+    let repoRoot: string;
+    try {
+        repoRoot = execSync('git rev-parse --show-toplevel', {cwd: gitCommandPath, stdio: 'pipe'}).toString().trim();
+    } catch (e) {
+        console.error(`Error: Could not find git repository at ${gitCommandPath}. Skipping.`);
+        return;
+    }
+
+    const repoName = path.basename(repoRoot);
+
+    // If reading from cache, prefer that path and skip extraction
+    if (config.cache.read) {
+        yield* readCacheForRepo(repoRoot, repoName, config.cache.fileName || '.gitstats-cache.jsonl');
+        return;
+    }
+
+    // Stage 1: File Discovery
+    const finalTargetPath = path.relative(repoRoot, discoveryPath);
+    const includePathspecs = (config.filenameGlobs && config.filenameGlobs.length > 0) ? config.filenameGlobs.map(g => `'${g}'`).join(' ') : '';
+    const excludePathspecs = (config.excludeGlobs && config.excludeGlobs.length > 0) ? config.excludeGlobs.map(g => `':!${g}'`).join(' ') : '';
+    const filesCommand = `git ls-files -- "${finalTargetPath || '.'}" ${includePathspecs} ${excludePathspecs}`;
+    const filesOutput = execSync(filesCommand, {cwd: repoRoot, maxBuffer: 1024 * 1024 * 50}).toString().trim();
+    const files = filesOutput ? filesOutput.split('\n') : [];
+
+    console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
+
+    // Stage 2: Raw Data Extraction (Streaming)
+    // Optional cache writer
+    const maybeCachePath = config.cache.fileName ? (path.isAbsolute(config.cache.fileName) ? config.cache.fileName : path.join(repoRoot, config.cache.fileName)) : undefined;
+    const cacheStream = config.cache.write && maybeCachePath ? fs.createWriteStream(maybeCachePath, {flags: 'w'}) : null;
+    try {
+        for (let i = 0; i < files.length; i++) {
+            if (sigintCaught) break;
+            const file = files[i];
+            const progressMessage = `[${i + 1}/${files.length}] Analyzing: ${file}`;
+            process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
+
+            if (!file) continue;
+            const absPath = path.join(repoRoot, file);
+            let stat: fs.Stats | null = null;
+            try {
+                stat = fs.statSync(absPath);
+            } catch {
+                stat = null;
+            }
+            if (!stat || !stat.isFile() || stat.size === 0) continue;
+
+            try {
+                for (const item of extractRawStatsForFile(file, repoName, repoRoot)) {
+                    if (cacheStream) {
+                        try {
+                            cacheStream.write(JSON.stringify(item) + '\n');
+                        } catch {/* ignore write errors */
+                        }
+                    }
+                    yield item;
+                }
+            } catch (e: any) {
+                if (e.signal === 'SIGINT') sigintCaught = true;
+                // Silently skip files that error
+            }
+        }
+    } finally {
+        if (cacheStream) cacheStream.end();
+    }
+    process.stderr.write(' '.repeat(process.stderr.columns || 80) + '\r');
+    console.error(`Analysis complete for '${repoName}'.`);
 }
 
 /**
@@ -183,6 +190,8 @@ async function aggregateRawStats(statStream: AsyncGenerator<RawLineStat>, config
 
 // --- Main Application Controller ---
 async function main() {
+    const tmpVfs: VirtualFileSystem = new InMemoryFileSystemImpl();
+
     process.on('SIGINT', () => {
         if (sigintCaught) { console.error("\nForcing exit."); process.exit(130); }
         sigintCaught = true;
@@ -192,35 +201,23 @@ async function main() {
     const args = parseArgs();
     const config: Config = loadConfig(args);
     const originalCwd = process.cwd();
-    let repoPathsToProcess: string[] = [...config.additionalRepoPaths];
 
-    // --- Repo Discovery ---
-    const targetFullPath = path.resolve(originalCwd, config.targetPath);
-    if (!fs.existsSync(targetFullPath)) {
-        console.error(`Error: Path does not exist: ${targetFullPath}`);
-        process.exit(1);
-    }
-    if (isGitRepo(targetFullPath)) {
-        repoPathsToProcess.push(config.targetPath);
-    } else if (fs.statSync(targetFullPath).isDirectory()) {
-        console.error(`'${config.targetPath}' is not a git repository. Searching for git repositories within...`);
-        const foundRepos = getDirectories(targetFullPath)
-            .flatMap(dir => isGitRepo(dir) ? [dir] : getDirectories(dir).filter(isGitRepo))
-            .map(repoPath => path.relative(originalCwd, repoPath));
-        repoPathsToProcess.push(...foundRepos);
-    }
+    let repoPathsToProcess: string[] = [...config.additionalRepoPaths, config.targetPath]
+        .flatMap(it => findRepositories(it, 3));
     repoPathsToProcess = [...new Set(repoPathsToProcess)].sort();
-
     if (repoPathsToProcess.length === 0) {
-        console.error("No git repositories found to analyze.");
-        process.exit(0);
+        throw new Error("No git repositories found to analyze.");
     }
 
-    console.error(`Found ${repoPathsToProcess.length} repositories to analyze:`);
+    console.log(`Found ${repoPathsToProcess.length} repositories to analyze:`);
     repoPathsToProcess.forEach(p => console.error(`- ${p || '.'}`));
 
     // --- Pipeline Execution ---
-    const statStream = discoverAndExtract(repoPathsToProcess, config);
+    const statStream =
+        AsyncGeneratorUtil.flatMap(
+            repoPathsToProcess,
+            repoPath => doProcess1(repoPath, config)
+        );
 
     if (config.outputFormat === 'html') {
         const aggregatedData = await aggregateRawStats(statStream, config); // Stage 3
@@ -233,11 +230,20 @@ async function main() {
         console.log(`\nHTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
         await streamToCsv(
-            ["repositoryName", "filePath", "language", "username", "commitTimestamp"],
+            ["repoName", "filePath", "lang", "user", "time"],
             statStream
         );
         if (sigintCaught) console.error("\nAnalysis was interrupted. CSV output may be incomplete.");
     }
+}
+
+function findRepositories(path: string, depth: number): string[] {
+    if (depth <= 0) return [];
+    if (!fs.existsSync(path)) throw new Error(`Path does not exist: ${path}`);
+    if (!fs.statSync(path).isDirectory()) return [];
+    if (isGitRepo(path)) return [path];
+    let result = getDirectories(path).flatMap(dir => findRepositories(dir, depth - 1));
+    return [...new Set(result)].sort();
 }
 
 // --- Entry Point ---
