@@ -15,7 +15,7 @@ export type Config = {
   htmlOutputFile?: string;
   filenameGlobs: string[];
   excludeGlobs: string[];
-  groupBy: 'user' | 'repo' | 'lang';
+  groupBy: string;
   thenBy: 'repo' | 'lang' | 'date';
   dayBuckets: number[];
   cache: CacheConfig;

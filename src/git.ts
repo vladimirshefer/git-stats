@@ -1,6 +1,7 @@
-import {RawLineStat} from "./base/RawLineStat";
 import {execSync} from "child_process";
 import path from "path";
+import {DataRow} from "./index";
+import fs from "fs";
 
 /**
  * Executes git blame --line-porcelain for a file and returns the raw output as a string.
@@ -66,34 +67,36 @@ function executeGitBlamePorcelain(file: string, repoRoot: string): string {
  * The parser extracts the author name and committer-time for each code line.
  *
  * @param file - relative path to the file within the repository
- * @param repoName - name of the repository
  * @param repoRoot - absolute path to the repository root
+ * @param fields
  */
-export function extractRawStatsForFile(file: string, repoName: string, repoRoot: string): RawLineStat[] {
+export function git_blame_porcelain(file: string, repoRoot: string, fields: string[]): DataRow[] {
     const blameOutput = executeGitBlamePorcelain(file, repoRoot);
     const blameLines = blameOutput.trim().split('\n');
-    const lang = path.extname(file) || 'Other';
 
-    const fields = ["author", "committer-time"];
-    const includeAuthor = fields.includes("author")
-    const includeCommitterTime = fields.includes("committer-time")
+    const userPos = fields.indexOf("author");
+    const commiterTimePos = fields.indexOf("committer-time");
+    let nextRow: DataRow = [...fields]
 
-    let currentUser = '', currentTime = 0;
-    const result: any[] = [];
+    const result: DataRow[] = [];
     for (const line of blameLines) {
         if (line.startsWith('\t')) {
-            result.push({repoName, filePath: file, lang, user: currentUser, time: currentTime});
+            result.push(nextRow);
             continue;
         }
-        if (includeAuthor && line.startsWith('author ')) {
-            currentUser = line.substring('author '.length).replace(/^<|>$/g, '');
+        if (userPos >= 0 && line.startsWith('author ')) {
+            nextRow[userPos] = line.substring('author '.length).replace(/^<|>$/g, '');
             continue;
         }
-        if (includeCommitterTime && line.startsWith('committer-time ')) {
-            currentTime = parseInt(line.substring('committer-time '.length), 10);
+        if (commiterTimePos >= 0 && line.startsWith('committer-time ')) {
+            nextRow[commiterTimePos] = parseInt(line.substring('committer-time '.length), 10);
             continue;
         }
     }
 
     return result;
+}
+
+export function isGitRepo(dir: string): boolean {
+    return fs.existsSync(path.join(dir, '.git'));
 }
