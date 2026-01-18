@@ -39,7 +39,10 @@ function getDirectories(source: string): string[] {
 
 export type DataRow = any[];
 
-async function* doProcess1(repoPath: string): AsyncGenerator<DataRow> {
+async function* doProcess1(
+    repoPath: string,
+    doProcessFile: (repoRoot: string, fileName: string) => DataRow[]
+): AsyncGenerator<DataRow> {
     console.error(`\nProcessing repository: ${repoPath || '.'}`);
 
     const originalCwd = process.cwd();
@@ -61,7 +64,6 @@ async function* doProcess1(repoPath: string): AsyncGenerator<DataRow> {
 
     const repoName = path.basename(repoRoot);
 
-    // Stage 1: File Discovery
     const finalTargetPath = path.relative(repoRoot, discoveryPath);
     const filesCommand = `git ls-files -- "${finalTargetPath || '.'}"`;
     const filesOutput = execSync(filesCommand, {cwd: repoRoot, maxBuffer: 1024 * 1024 * 50}).toString().trim();
@@ -76,7 +78,7 @@ async function* doProcess1(repoPath: string): AsyncGenerator<DataRow> {
         process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
 
         try {
-            yield* doProcessFile1(file, repoRoot);
+            yield* doProcessFile(file, repoRoot);
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
             // Silently skip files that error
@@ -100,8 +102,8 @@ function bucket(n: number, buckets: number[]): number {
     return -1;
 }
 
-async function* doProcessFile1(filePath: string, repoRoot: string): AsyncGenerator<DataRow> {
-    if (!filePath) return;
+function doProcessFile1(filePath: string, repoRoot: string): DataRow[] {
+    if (!filePath) return [];
     const absPath = path.join(repoRoot, filePath);
     let stat: fs.Stats | null = null;
     try {
@@ -109,12 +111,14 @@ async function* doProcessFile1(filePath: string, repoRoot: string): AsyncGenerat
     } catch(e: any) {
         console.error(`Fail get stats for file ${absPath}`, e.stack || e.message || e);
     }
-    if (!stat || !stat.isFile() || stat.size === 0) return;
+    if (!stat || !stat.isFile() || stat.size === 0) return [];
 
+    const result: DataRow[] = []
     for (const item of git_blame_porcelain(filePath, repoRoot, ["author", "committer-time"])) {
         const lang = path.extname(filePath) || 'Other';
-        yield [item[0], bucket(daysAgo(item[1]), [0, 30, 100, 300, 1000, 10000, 1000_000]), lang, filePath, repoRoot];
+        result.push([item[0], bucket(daysAgo(item[1]), [0, 30, 100, 300, 1000, 10000, 1000_000]), lang, filePath, repoRoot]);
     }
+    return result;
 }
 
 /**
@@ -170,7 +174,7 @@ async function main() {
     const statStream: AsyncIterable<DataRow> =
         AsyncGeneratorUtil.flatMap(
             repoPathsToProcess,
-            repoPath => doProcess1(repoPath)
+            repoPath => doProcess1(repoPath, doProcessFile1)
         );
 
     let prepared: AsyncGenerator<DataRow> = AsyncGeneratorUtil.map(statStream, it => {
@@ -182,12 +186,10 @@ async function main() {
     }
 
     if (config.outputFormat === 'html') {
-        const aggregatedData = await aggregateRawStats(statStream); // Stage 3
+        const aggregatedData = await aggregateRawStats(statStream);
         if (sigintCaught) console.error("\nAnalysis was interrupted. HTML report may be incomplete.");
 
-        // Stage 4 for HTML
         const htmlFile = config.htmlOutputFile || 'git-stats.html';
-        // NOTE: generateHtmlReport expects CliArgs; passing config as it's compatible on used fields
         generateHtmlReport(aggregatedData, htmlFile, originalCwd, config as unknown as CliArgs);
         console.log(`\nHTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
