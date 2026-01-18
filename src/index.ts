@@ -66,21 +66,30 @@ async function* forEachRepoFile(
 
     const finalTargetPath = path.relative(repoRoot, discoveryPath);
     const filesCommand = `git ls-files -- "${finalTargetPath || '.'}"`;
-    const filesOutput = execSync(filesCommand, {cwd: repoRoot, maxBuffer: 1024 * 1024 * 50}).toString().trim();
+    const filesOutput = execSync(filesCommand, {cwd: repoRoot, maxBuffer: 1024 * 1024 * 1000}).toString().trim();
     const files = filesOutput ? filesOutput.split('\n') : [];
-    const filesClustered = clusterFiles(files, 1000, 50);
+    let minClusterSize = Math.max(5, files.length / 1000);
+    const filesClustered = clusterFiles(
+        files,
+        Math.max(1000, files.length * 5 / 100),
+        minClusterSize
+    );
     console.log(filesClustered.map(it => `${it.path}${it.isLeftovers ? "/*" : ""} (${it.weight})`));
+    let clusterPaths = filesClustered.map(it => it.path);
 
     console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
 
+    let filesShuffled = [...files].sort(() => Math.random() - 0.5);
+
     for (let i = 0; i < files.length; i++) {
         if (sigintCaught) break;
-        const file = files[i];
+        const file = filesShuffled[i];
         const progressMessage = `[${i + 1}/${files.length}] Analyzing: ${file}`;
         process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
 
         try {
-            yield* doProcessFile(repoRoot, file);
+            let clusterPath = clusterPaths.find(it => file.startsWith(it));
+            yield* doProcessFile(repoRoot, file).map(it => it.concat(clusterPath) as DataRow);
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
             // Silently skip files that error
@@ -174,7 +183,7 @@ async function main() {
 
     const statStream: AsyncGenerator<DataRow> = new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.of(repoPathsToProcess))
         .flatMap(repoPath => forEachRepoFile(repoPath, doProcessFile1))
-        .map(it => [it[1], it[0]])
+        .map(it => [it[5], it[0]])
         .get();
 
     const aggregatedData = await aggregateRawStats(statStream);
