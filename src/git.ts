@@ -8,10 +8,17 @@ import fs from "fs";
  *
  * @param file - relative path to the file within the repository
  * @param repoRoot - absolute path to the repository root
+ * @param revisionBoundary
+ * @param since
  * @returns plain string output from git blame --line-porcelain
  */
-function executeGitBlamePorcelain(file: string, repoRoot: string): string {
-    return execSync(`git blame --line-porcelain -- "${file}"`, {
+function executeGitBlamePorcelain(
+    file: string,
+    repoRoot: string,
+    revisionBoundary: string | undefined = undefined,
+    since: string | undefined = undefined
+): string {
+    return execSync(`git blame --line-porcelain ${!!since ? `--since=${since}` : ""} ${revisionBoundary || ""} -- "${file}"`, {
         cwd: repoRoot,
         maxBuffer: 1024 * 1024 * 50
     }).toString();
@@ -47,7 +54,7 @@ function executeGitBlamePorcelain(file: string, repoRoot: string): string {
  * committer-tz +0000
  * summary Initial commit
  * filename src/example.ts
- *
+ *    some text
  * b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1 3 3 1
  * author Alice Johnson
  * author-mail <alice@example.com>
@@ -72,16 +79,28 @@ function executeGitBlamePorcelain(file: string, repoRoot: string): string {
  */
 export function git_blame_porcelain(file: string, repoRoot: string, fields: string[]): DataRow[] {
     const blameOutput = executeGitBlamePorcelain(file, repoRoot);
+    return parsePorcelain(blameOutput, fields);
+}
+
+export function parsePorcelain(blameOutput: string, fields: string[]): DataRow[] {
     const blameLines = blameOutput.trim().split('\n');
 
     const userPos = fields.indexOf("author");
     const commiterTimePos = fields.indexOf("committer-time");
-    let nextRow: DataRow = [...fields]
-
+    const boundaryPos = fields.indexOf("boundary");
+    let emptyRow: DataRow = [...fields];
+    if (commiterTimePos >= 0) {
+        emptyRow[commiterTimePos] = 0
+    }
+    if (boundaryPos >= 0) {
+        emptyRow[boundaryPos] = false
+    }
+    let nextRow: DataRow = [...emptyRow]
     const result: DataRow[] = [];
     for (const line of blameLines) {
         if (line.startsWith('\t')) {
             result.push(nextRow);
+            nextRow = [...emptyRow]
             continue;
         }
         if (userPos >= 0 && line.startsWith('author ')) {
@@ -91,6 +110,9 @@ export function git_blame_porcelain(file: string, repoRoot: string, fields: stri
         if (commiterTimePos >= 0 && line.startsWith('committer-time ')) {
             nextRow[commiterTimePos] = parseInt(line.substring('committer-time '.length), 10);
             continue;
+        }
+        if (boundaryPos >= 0 && line.startsWith("boundary")) {
+            nextRow[boundaryPos] = true
         }
     }
 
