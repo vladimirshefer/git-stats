@@ -71,7 +71,7 @@ async function* forEachRepoFile(
     let minClusterSize = Math.max(5, files.length / 1000);
     const filesClustered = clusterFiles(
         files,
-        Math.max(1000, files.length * 5 / 100),
+        Math.max(20, minClusterSize*2),
         minClusterSize
     );
     console.log(filesClustered.map(it => `${it.path}${it.isLeftovers ? "/*" : ""} (${it.weight})`));
