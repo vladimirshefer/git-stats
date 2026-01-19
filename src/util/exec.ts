@@ -17,13 +17,25 @@ export function execAsync(
 
         let stdout: string[] = [];
         let stderr: string[] = [];
+        let stdoutBuffer = "";
+        let stderrBuffer = "";
 
         child.stdout.on("data", (data) => {
-            stdout.push(data.toString());
+            stdoutBuffer += data.toString();
+            const lines = stdoutBuffer.split('\n');
+            for (let i = 0; i < lines.length - 1; i++) {
+                stdout.push(lines[i]);
+            }
+            stdoutBuffer = lines[lines.length - 1];
         });
 
         child.stderr.on("data", (data) => {
-            stderr.push(data.toString());
+            stderrBuffer += data.toString();
+            const lines = stderrBuffer.split('\n');
+            for (let i = 0; i < lines.length - 1; i++) {
+                stderr.push(lines[i]);
+            }
+            stderrBuffer = lines[lines.length - 1];
         });
 
         child.on("error", (err) => {
@@ -31,10 +43,17 @@ export function execAsync(
         });
 
         child.on("close", (code) => {
+            if (stdoutBuffer.length > 0) {
+                stdout.push(stdoutBuffer);
+            }
+            if (stderrBuffer.length > 0) {
+                stderr.push(stderrBuffer);
+            }
+
             if (code === 0) {
                 resolve({stdout: stdout, stderr: stderr});
             } else {
-                reject(new Error(`Command failed with code ${code}\n${stderr}`));
+                reject(new Error(`Command failed with code ${code}\n${stderr.join('\n')}`));
             }
         });
     });
