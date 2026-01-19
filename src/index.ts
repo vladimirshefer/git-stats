@@ -18,7 +18,7 @@ import {generateHtmlReport} from './output/report_template';
 import {AggregatedData, CliArgs, parseArgs} from './cli/parseArgs';
 import {Config, loadConfig} from './input/config';
 import {git_blame_porcelain, isGitRepo} from "./git";
-import {InMemoryFileSystemImpl, VirtualFileSystem} from "./vfs";
+import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
 import {AsyncGeneratorUtil, AsyncIteratorWrapperImpl} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
 
@@ -127,7 +127,10 @@ async function doProcessFile1(repoRoot: string, filePath: string): Promise<DataR
     const result: DataRow[] = []
     for (const item of await git_blame_porcelain(filePath, repoRoot, ["author", "committer-time"])) {
         const lang = path.extname(filePath) || 'Other';
-        result.push([item[0], bucket(daysAgo(item[1]), [0, 30, 100, 300, 1000, 10000, 1000_000]), lang, filePath, repoRoot]);
+        let days_bucket = bucket(daysAgo(item[1]), [0, 30, 300, 1000, 1000000]);
+        if (days_bucket != -1) {
+            result.push([item[0], days_bucket, lang, filePath, repoRoot]);
+        }
     }
     return result;
 }
@@ -164,7 +167,7 @@ function getRepoPathsToProcess(config: Config): string[] {
 
 // --- Main Application Controller ---
 async function main() {
-    const tmpVfs: VirtualFileSystem = new InMemoryFileSystemImpl();
+    const tmpVfs: VirtualFileSystem = new RealFileSystemImpl("./git-stats/");
 
     process.on('SIGINT', () => {
         if (sigintCaught) {
@@ -181,11 +184,22 @@ async function main() {
 
     let repoPathsToProcess = getRepoPathsToProcess(config);
 
-    const statStream: AsyncGenerator<DataRow> = new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.of(repoPathsToProcess))
-        .flatMap(repoPath => forEachRepoFile(repoPath, doProcessFile1))
-        .map(it => [it[5], it[0]])
-        .get();
+    await tmpVfs.write("data.jsonl", "");
 
+    let data: Record<string, number> = {}
+    await new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.of(repoPathsToProcess))
+        .flatMap(repoPath => forEachRepoFile(repoPath, doProcessFile1))
+        .map(it => JSON.stringify([it[0], it[1], it[2], it[5], path.basename(it[4])]))
+        .forEach ( it => {
+            if (!data[it]) data[it] = 0;
+            data[it]++
+        });
+
+    Object.entries(data).forEach ( ([k, v])=> tmpVfs.append("data.jsonl", `[${k},${v}]\n`))
+
+    throw new Error()
+
+    let statStream: any = []
     const aggregatedData = await aggregateRawStats(statStream);
 
     if (sigintCaught) console.error("Analysis was interrupted. Report may be incomplete.");

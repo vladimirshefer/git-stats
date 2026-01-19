@@ -20,13 +20,20 @@ export class RealFileSystemImpl implements VirtualFileSystem {
 
     async write(filePath: string, content: string): Promise<void> {
         let path1 = path.resolve(this.resolve(filePath), "..");
-        console.log(`creating directory ${path1}`)
         fs.mkdirSync(path1, {recursive: true})
         fs.writeFileSync(this.resolve(filePath), content);
     }
 
     async append(filePath: string, content: string): Promise<void> {
-        fs.appendFileSync(this.resolve(filePath), content);
+        return new Promise((resolve, reject) => {
+            fs.appendFile(this.resolve(filePath), content, (err) => {
+                if (!err) {
+                    resolve(undefined)
+                } else {
+                    reject(err)
+                }
+            });
+        })
     }
 
     private resolve(filePath: string) {
