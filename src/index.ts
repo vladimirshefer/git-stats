@@ -15,7 +15,7 @@ import {execSync} from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
-import {AggregatedData, CliArgs, parseArgs} from './cli/parseArgs';
+import {CliArgs, parseArgs} from './cli/parseArgs';
 import {Config, loadConfig} from './input/config';
 import {git_blame_porcelain, isGitRepo} from "./git";
 import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
@@ -37,7 +37,8 @@ function getDirectories(source: string): string[] {
     }
 }
 
-export type DataRow = any[];
+export type Primitive = keyof any;
+export type DataRow = (Primitive)[];
 
 async function* forEachRepoFile(
     repoPath: string,
@@ -127,7 +128,7 @@ async function doProcessFile1(repoRoot: string, filePath: string): Promise<DataR
     const result: DataRow[] = []
     for (const item of await git_blame_porcelain(filePath, repoRoot, ["author", "committer-time"])) {
         const lang = path.extname(filePath) || 'Other';
-        let days_bucket = bucket(daysAgo(item[1]), [0, 30, 300, 1000, 1000000]);
+        let days_bucket = bucket(daysAgo(item[1] as number), [0, 30, 300, 1000, 1000000]);
         if (days_bucket != -1) {
             result.push([item[0], days_bucket, lang, filePath, repoRoot]);
         }
@@ -136,20 +137,29 @@ async function doProcessFile1(repoRoot: string, filePath: string): Promise<DataR
 }
 
 /**
- * Stage 3: Aggregate raw stats from the stream based on grouping dimensions.
+ * Counts distinct rows in an async generator and appends the count to each row.
  */
-async function aggregateRawStats(statStream: AsyncIterable<DataRow>): Promise<AggregatedData> {
-    const stats: AggregatedData = {};
-    for await (const item of statStream) {
-        const primaryKey: string = item[0];
-        const secondaryKey = item[1];
+export async function* distinctCount(
+    source: AsyncGenerator<DataRow>
+): AsyncGenerator<DataRow> {
+    // Map to store counts of serialized rows
+    const map = new Map<string, { row: DataRow; count: number }>();
 
-        if (!stats[primaryKey]) stats[primaryKey] = {};
-        if (!stats[primaryKey][secondaryKey]) stats[primaryKey][secondaryKey] = 0;
+    for await (const row of source) {
+        // Serialize the row to use as a Map key
+        const key = JSON.stringify(row);
 
-        stats[primaryKey][secondaryKey]++;
+        if (map.has(key)) {
+            map.get(key)!.count += 1;
+        } else {
+            map.set(key, { row, count: 1 });
+        }
     }
-    return stats;
+
+    // Yield each distinct row with its count appended
+    for (const { row, count } of map.values()) {
+        yield [...row, count];
+    }
 }
 
 function getRepoPathsToProcess(config: Config): string[] {
@@ -186,30 +196,21 @@ async function main() {
 
     await tmpVfs.write("data.jsonl", "");
 
-    let data: Record<string, number> = {}
-    await new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.of(repoPathsToProcess))
+    let dataSet = new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.of(repoPathsToProcess))
         .flatMap(repoPath => forEachRepoFile(repoPath, doProcessFile1))
-        .map(it => JSON.stringify([it[0], it[1], it[2], it[5], path.basename(it[4])]))
-        .forEach ( it => {
-            if (!data[it]) data[it] = 0;
-            data[it]++
-        });
+        .map(it => [it[0], it[1], it[2], it[5], path.basename(it[4] as string)])
+        .get();
 
-    Object.entries(data).forEach ( ([k, v])=> tmpVfs.append("data.jsonl", `[${k},${v}]\n`))
-
-    throw new Error()
-
-    let statStream: any = []
-    const aggregatedData = await aggregateRawStats(statStream);
-
-    if (sigintCaught) console.error("Analysis was interrupted. Report may be incomplete.");
+    let aggregatedData1 = distinctCount(dataSet);
+    let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
     if (config.outputFormat === 'html') {
         const htmlFile = config.htmlOutputFile || 'git-stats.html';
         generateHtmlReport(aggregatedData, htmlFile, originalCwd, config as unknown as CliArgs);
         console.log(`HTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
-        console.log(JSON.stringify(aggregatedData, null, 2))
+        aggregatedData
+            .forEach ( it => tmpVfs.append(`data.jsonl`, JSON.stringify(it) + `\n`));
     }
 }
 

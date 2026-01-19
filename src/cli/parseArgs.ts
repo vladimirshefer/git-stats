@@ -3,8 +3,6 @@ import path from 'path';
 export type GroupBy = 'user' | 'repo' | 'lang';
 export type ThenBy = 'repo' | 'lang' | 'date';
 
-export type AggregatedData = Record<string, Record<string, number>>;
-
 export interface CliArgs {
   targetPath: string;
   additionalRepoPaths: string[];

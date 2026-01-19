@@ -42,6 +42,26 @@ export class AsyncGeneratorUtil {
         }
     }
 
+    static async collect<T>(source: AsyncGenerator<T>): Promise<T[]> {
+        const result: T[] = [];
+        const iterator = source[Symbol.asyncIterator]();
+
+        return new Promise((resolve, reject) => {
+            function step(): void {
+                iterator.next()
+                    .then(({ value, done }) => {
+                        if (done) {
+                            resolve(result);
+                        } else {
+                            result.push(value);
+                            step();
+                        }
+                    })
+                    .catch(reject);
+            }
+            step();
+        });
+    }
 }
 
 export interface AsyncIteratorWrapper<T> {
