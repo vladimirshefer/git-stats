@@ -179,7 +179,7 @@ function getRepoPathsToProcess(config: Config): string[] {
 
 // --- Main Application Controller ---
 async function main() {
-    const tmpVfs: VirtualFileSystem = new RealFileSystemImpl("./git-stats/");
+    const tmpVfs: VirtualFileSystem = new RealFileSystemImpl("./.git-stats/");
 
     process.on('SIGINT', () => {
         if (sigintCaught) {
