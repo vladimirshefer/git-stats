@@ -10,12 +10,6 @@
         .container { max-width: 900px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.05); }
         h1, h2 { border-bottom: 1px solid #dee2e6; padding-bottom: 10px; }
         .chart-container { margin-top: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 30px; }
-        th, td { padding: 12px; border: 1px solid #dee2e6; text-align: left; white-space: nowrap; }
-        th.num, td.num { text-align: right; }
-        thead { background-color: #e9ecef; }
-        tbody tr:nth-child(odd) { background-color: #f8f9fa; }
-        tbody tr:hover { background-color: #e9ecef; }
     </style>
 </head>
 <body>
@@ -37,18 +31,6 @@
             <h2 id="chartTitle">Contributions</h2>
             <canvas id="mainChart"></canvas>
         </div>
-        <h2 id="tableTitle">All Stats</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th id="primaryHeader">Author</th>
-                    <th class="num">Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                
-            </tbody>
-        </table>
     </div>
     <script>
         const RAW_DATASET =
@@ -213,30 +195,8 @@
           mainChart.data.datasets = ds;
           mainChart.update();
 
-          // update titles and headers
+          // update titles
           document.getElementById('chartTitle').textContent = `Contributions by ${NICE_LABEL[primaryKey]||primaryKey} (Top 20), grouped by ${NICE_LABEL[secondaryKey]||secondaryKey}`;
-          document.getElementById('primaryHeader').textContent = NICE_LABEL[primaryKey]||primaryKey;
-
-          // update table head extra headers
-          const theadRow = document.querySelector('table thead tr');
-          // remove everything after first two th (primary + Total) and rebuild
-          while (theadRow.children.length > 2) theadRow.removeChild(theadRow.lastChild);
-          for (const sk of secondaryKeys) {
-            const th = document.createElement('th'); th.className = 'num'; th.textContent = String(sk); theadRow.appendChild(th);
-          }
-
-          // update table body
-          const tbody = document.querySelector('table tbody');
-          tbody.innerHTML = '';
-          for (const pk of primaryKeys) {
-            const tr = document.createElement('tr');
-            const tdPk = document.createElement('td'); tdPk.textContent = String(pk); tr.appendChild(tdPk);
-            const tdTotal = document.createElement('td'); tdTotal.className = 'num'; tdTotal.textContent = (totals.get(pk)||0).toLocaleString(); tr.appendChild(tdTotal);
-            for (const sk of secondaryKeys) {
-              const td = document.createElement('td'); td.className = 'num'; td.textContent = ((pv.get(pk)?.get(sk))||0).toLocaleString(); tr.appendChild(td);
-            }
-            tbody.appendChild(tr);
-          }
         }
 
         function recompute(){
