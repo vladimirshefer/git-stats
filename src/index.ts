@@ -186,8 +186,6 @@ async function runScan(args: string[]) {
         console.error("\nSignal received. Finishing current file then stopping. Press Ctrl+C again to exit immediately.");
     });
 
-    const originalCwd = process.cwd();
-
     const inputPaths = (args && args.length > 0) ? args : ['.'];
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
@@ -202,7 +200,7 @@ async function runScan(args: string[]) {
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
     // Keep current behavior: write aggregated data into .git-stats/data.jsonl
-    aggregatedData.forEach(it => tmpVfs.append(`data.jsonl`, JSON.stringify(it) + `\n`));
+    aggregatedData.forEach(it => console.log(JSON.stringify(it)));
 }
 
 async function runHtml(args: string[]) {
