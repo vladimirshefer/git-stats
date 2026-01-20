@@ -77,7 +77,7 @@ async function* forEachRepoFile(
         Math.max(20, minClusterSize*2),
         minClusterSize
     );
-    console.log(filesClustered.map(it => `${it.path}${it.isLeftovers ? "/*" : ""} (${it.weight})`));
+    console.error(filesClustered.map(it => `${it.path}${it.isLeftovers ? "/*" : ""} (${it.weight})`));
     let clusterPaths = filesClustered.map(it => it.path);
 
     console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
@@ -91,7 +91,7 @@ async function* forEachRepoFile(
         process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
 
         try {
-            let clusterPath = clusterPaths.find(it => file.startsWith(it)) || "$$$unknown$$$";
+            let clusterPath = clusterPaths.find(it => file.startsWith(it)) ?? "$$$unknown$$$";
             yield* (await doProcessFile(repoRoot, file)).map(it => it.concat(clusterPath) as DataRow);
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
@@ -209,7 +209,7 @@ async function main() {
     if (config.outputFormat === 'html') {
         const htmlFile = config.htmlOutputFile || 'git-stats.html';
         generateHtmlReport(aggregatedData, htmlFile, originalCwd, config as unknown as CliArgs);
-        console.log(`HTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
+        console.error(`HTML report generated: ${path.resolve(originalCwd, htmlFile)}`);
     } else {
         aggregatedData
             .forEach ( it => tmpVfs.append(`data.jsonl`, JSON.stringify(it) + `\n`));
