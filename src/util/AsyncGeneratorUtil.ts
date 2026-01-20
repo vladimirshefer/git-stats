@@ -30,18 +30,6 @@ export class AsyncGeneratorUtil {
         }
     }
 
-    static async* distinctCount<T>(source: AsyncIterable<T>): AsyncGenerator<[T, number]> {
-        const result: { [key: string]: number } = {}
-        for await (const item of source) {
-            let k = JSON.stringify(item);
-            result[k] = (result[k] || 0) + 1;
-        }
-        for (const [key, count] of Object.entries(result)) {
-            const values = JSON.parse(key);
-            yield [values, count];
-        }
-    }
-
     static async collect<T>(source: AsyncGenerator<T>): Promise<T[]> {
         const result: T[] = [];
         const iterator = source[Symbol.asyncIterator]();
