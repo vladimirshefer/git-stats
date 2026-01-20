@@ -86,8 +86,13 @@ export async function executeGitBlamePorcelain(
  * @param repoRoot - absolute path to the repository root
  * @param fields
  */
-export async function git_blame_porcelain(file: string, repoRoot: string, fields: string[]): Promise<DataRow[]> {
-    const blameOutput = await executeGitBlamePorcelain(file, repoRoot);
+export async function git_blame_porcelain(
+    file: string,
+    repoRoot: string,
+    fields: string[],
+    revisionBoundary?: string
+): Promise<DataRow[]> {
+    const blameOutput = await executeGitBlamePorcelain(file, repoRoot, revisionBoundary);
     return parsePorcelain(blameOutput, fields);
 }
 
@@ -100,7 +105,7 @@ export function parsePorcelain(blameOutput: string[], fields: string[]): DataRow
         emptyRow[commiterTimePos] = 0
     }
     if (boundaryPos >= 0) {
-        emptyRow[boundaryPos] = false
+        emptyRow[boundaryPos] = 0
     }
     let nextRow: DataRow = [...emptyRow]
     const result: DataRow[] = [];
@@ -119,7 +124,7 @@ export function parsePorcelain(blameOutput: string[], fields: string[]): DataRow
             continue;
         }
         if (boundaryPos >= 0 && line.startsWith("boundary")) {
-            nextRow[boundaryPos] = true
+            nextRow[boundaryPos] = 1
         }
     }
 
@@ -128,4 +133,27 @@ export function parsePorcelain(blameOutput: string[], fields: string[]): DataRow
 
 export function isGitRepo(dir: string): boolean {
     return fs.existsSync(path.join(dir, '.git'));
+}
+
+export async function findRevision(repoRoot: string, commitsBack: number): Promise<string | undefined> {
+    let n = commitsBack;
+    let revisionBoundary: string | undefined = undefined;
+    try {
+        const {stdout} = await execAsync("git", [
+            "rev-list",
+            "--max-count=1",
+            "--skip=" + n,
+            "HEAD"
+        ], {cwd: repoRoot});
+        const boundaryCommit = stdout.join("\n");
+        if (boundaryCommit) {
+            revisionBoundary = `${boundaryCommit}..HEAD`;
+        }
+    } catch (e: any) {
+        // If we fail to determine the boundary (e.g., fewer than N commits), proceed without it
+        if (e && (e.stack || e.message)) {
+            console.error(`Failed to compute ${n}-commit boundary for repo ${repoRoot}:`, e.message || e.stack);
+        }
+    }
+    return revisionBoundary;
 }

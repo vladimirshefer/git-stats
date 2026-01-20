@@ -15,7 +15,7 @@ import {execAsync} from './util/exec';
 import * as fs from 'fs';
 import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
-import {git_blame_porcelain, isGitRepo} from "./git";
+import {findRevision, git_blame_porcelain, isGitRepo} from "./git";
 import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
 import {AsyncGeneratorUtil, AsyncIteratorWrapperImpl} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
@@ -38,7 +38,7 @@ function getDirectories(source: string): string[] {
 
 async function* forEachRepoFile(
     repoPath: string,
-    doProcessFile: (repoRoot: string, fileName: string) => Promise<DataRow[]>
+    doProcessFile: (repoRoot: string, fileName: string, revisionBoundary: string | undefined) => Promise<DataRow[]>
 ): AsyncGenerator<DataRow> {
     console.error(`\nProcessing repository: ${repoPath || '.'}`);
 
@@ -60,6 +60,8 @@ async function* forEachRepoFile(
     }
 
     const repoName = path.basename(repoRoot);
+
+    let revisionBoundary = await findRevision(repoRoot, 1000);
 
     const finalTargetPath = path.relative(repoRoot, discoveryPath);
     const { stdout: lsFilesOut } = await execAsync(
@@ -89,7 +91,7 @@ async function* forEachRepoFile(
 
         try {
             let clusterPath = clusterPaths.find(it => file.startsWith(it)) ?? "$$$unknown$$$";
-            yield* (await doProcessFile(repoRoot, file)).map(it => it.concat(clusterPath) as DataRow);
+            yield* (await doProcessFile(repoRoot, file, revisionBoundary)).map(it => it.concat(clusterPath) as DataRow);
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
             // Silently skip files that error
@@ -113,7 +115,7 @@ function bucket(n: number, buckets: number[]): number {
     return -1;
 }
 
-async function doProcessFile1(repoRoot: string, filePath: string): Promise<DataRow[]> {
+async function doProcessFile1(repoRoot: string, filePath: string, revisionBoundary?: string): Promise<DataRow[]> {
     if (!filePath) return [];
     const absPath = path.join(repoRoot, filePath);
     let stat: fs.Stats | null = null;
@@ -125,7 +127,7 @@ async function doProcessFile1(repoRoot: string, filePath: string): Promise<DataR
     if (!stat || !stat.isFile() || stat.size === 0) return [];
 
     const result: DataRow[] = []
-    for (const item of await git_blame_porcelain(filePath, repoRoot, ["author", "committer-time"])) {
+    for (const item of await git_blame_porcelain(filePath, repoRoot, ["author", "committer-time"], revisionBoundary)) {
         const lang = path.extname(filePath) || 'Other';
         let days_bucket = bucket(daysAgo(item[1] as number), [0, 30, 300, 1000, 1000000]);
         if (days_bucket != -1) {
