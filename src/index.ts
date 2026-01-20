@@ -21,6 +21,7 @@ import {git_blame_porcelain, isGitRepo} from "./git";
 import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
 import {AsyncGeneratorUtil, AsyncIteratorWrapperImpl} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
+import {DataRow} from "./base/types";
 
 let sigintCaught = false;
 
@@ -36,9 +37,6 @@ function getDirectories(source: string): string[] {
         return [];
     }
 }
-
-export type Primitive = keyof any;
-export type DataRow = (Primitive)[];
 
 async function* forEachRepoFile(
     repoPath: string,

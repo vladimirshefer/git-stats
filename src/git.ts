@@ -1,7 +1,7 @@
 import path from "path";
-import {DataRow} from "./index";
 import fs from "fs";
 import {execAsync} from "./util/exec";
+import {DataRow} from "./base/types";
 
 /**
  * Executes git blame --line-porcelain for a file and returns the raw output as a string.
