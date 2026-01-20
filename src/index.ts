@@ -89,7 +89,7 @@ async function* forEachRepoFile(
         process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
 
         try {
-            let clusterPath = clusterPaths.find(it => file.startsWith(it));
+            let clusterPath = clusterPaths.find(it => file.startsWith(it)) || "$$$unknown$$$";
             yield* (await doProcessFile(repoRoot, file)).map(it => it.concat(clusterPath) as DataRow);
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
