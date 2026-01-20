@@ -21,15 +21,27 @@
 <body>
     <div class="container">
         <h1>Git Contribution Statistics</h1>
-        <div class="chart-container">
-            <h2>__CHART_TITLE__</h2>
+        <div class="controls">
+            <h2>Controls</h2>
+            <div style="display:flex; gap:16px; flex-wrap: wrap; align-items: center;">
+                <label>Primary group:
+                    <select id="primarySelect"></select>
+                </label>
+                <label>Secondary group:
+                    <select id="secondarySelect"></select>
+                </label>
+            </div>
+            <div style="margin-top:12px; display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:12px;" id="filters"></div>
+        </div>
+        <div class="chart-container" style="margin-top: 20px;">
+            <h2 id="chartTitle">__CHART_TITLE__</h2>
             <canvas id="mainChart"></canvas>
         </div>
-        <h2>All Author Stats</h2>
+        <h2 id="tableTitle">All Stats</h2>
         <table>
             <thead>
                 <tr>
-                    <th>Author</th>
+                    <th id="primaryHeader">Author</th>
                     __TABLE_HEADERS__
                 </tr>
             </thead>
@@ -39,11 +51,13 @@
         </table>
     </div>
     <script>
+        const RAW_DATASET = __DATASET_JSON__;
+        const HEADER_LABELS = __HEADER_LABELS_JSON__;
         const labels = __CHART_LABELS_JSON__;
         const datasets = __CHART_DATASETS_JSON__;
 
         const ctx = document.getElementById('mainChart').getContext('2d');
-        const mainChart = new Chart(ctx, {
+        let mainChart = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: labels,
@@ -76,6 +90,160 @@
                 }
             }
         });
+
+        // -------- Client-side grouping/filtering engine --------
+        const KEY_INDEX = Object.fromEntries(HEADER_LABELS.map((k,i)=>[k,i]));
+        const COUNT_IDX_FROM_END = 1; // last element is count
+
+        const NICE_LABEL = {
+          author: 'Author',
+          days_bucket: 'Age (days)',
+          lang: 'Language',
+          clusterPath: 'Cluster',
+          repoName: 'Repo',
+          count: 'Count'
+        };
+
+        const allKeys = HEADER_LABELS.filter(k => k !== 'count');
+
+        function uniqueValues(arr, idx){
+          const set = new Set(arr.map(r => r[idx]));
+          return Array.from(set);
+        }
+
+        // Build filters UI
+        const filtersDiv = document.getElementById('filters');
+        const filterState = {};
+        for (const key of allKeys) {
+          const idx = KEY_INDEX[key];
+          const values = uniqueValues(RAW_DATASET, idx).sort((a,b)=>{
+            if (key==='days_bucket') return Number(a)-Number(b);
+            return String(a).localeCompare(String(b));
+          });
+          filterState[key] = new Set(values); // all selected by default
+          const container = document.createElement('div');
+          container.innerHTML = `
+            <label style="display:block; font-weight:600; margin-bottom:6px;">${NICE_LABEL[key]||key}
+              <span style="color:#6c757d; font-weight:400;">(<span data-role="sel">${values.length}</span>/<span data-role="tot">${values.length}</span>)</span>
+            </label>
+          `;
+          const select = document.createElement('select');
+          select.multiple = true;
+          select.size = Math.min(8, Math.max(3, values.length));
+          select.style.width = '100%';
+          for (const v of values) {
+            const opt = document.createElement('option');
+            opt.value = String(v);
+            opt.textContent = String(v);
+            opt.selected = true;
+            select.appendChild(opt);
+          }
+          select.addEventListener('change', ()=>{
+            const chosen = Array.from(select.selectedOptions).map(o=>o.value);
+            filterState[key] = new Set(chosen);
+            container.querySelector('[data-role="sel"]').textContent = String(chosen.length);
+            recompute();
+          });
+          container.appendChild(select);
+          filtersDiv.appendChild(container);
+        }
+
+        // Grouping selectors
+        const primarySel = document.getElementById('primarySelect');
+        const secondarySel = document.getElementById('secondarySelect');
+        for (const key of allKeys) {
+          const opt1 = document.createElement('option'); opt1.value = key; opt1.textContent = NICE_LABEL[key]||key; primarySel.appendChild(opt1);
+          const opt2 = document.createElement('option'); opt2.value = key; opt2.textContent = NICE_LABEL[key]||key; secondarySel.appendChild(opt2);
+        }
+        primarySel.value = 'author';
+        secondarySel.value = 'days_bucket';
+        primarySel.addEventListener('change', recompute);
+        secondarySel.addEventListener('change', recompute);
+
+        function passesFilters(row){
+          for (const key of allKeys) {
+            const idx = KEY_INDEX[key];
+            if (!filterState[key].has(String(row[idx]))) return false;
+          }
+          return true;
+        }
+
+        function pivot(dataset, primaryKey, secondaryKey){
+          const pIdx = KEY_INDEX[primaryKey];
+          const sIdx = KEY_INDEX[secondaryKey];
+          const pivot = new Map();
+          const totals = new Map();
+          const secValuesSet = new Set();
+          for (const row of dataset) {
+            if (!passesFilters(row)) continue;
+            const pk = row[pIdx];
+            const sk = row[sIdx];
+            const count = Number(row[row.length - COUNT_IDX_FROM_END]) || 0;
+            if (!pivot.has(pk)) pivot.set(pk, new Map());
+            const inner = pivot.get(pk);
+            inner.set(sk, (inner.get(sk)||0)+count);
+            totals.set(pk, (totals.get(pk)||0)+count);
+            secValuesSet.add(sk);
+          }
+          let primaryKeys = Array.from(pivot.keys());
+          primaryKeys.sort((a,b)=> (totals.get(b)||0) - (totals.get(a)||0));
+          let secondaryKeys = Array.from(secValuesSet);
+          if (secondaryKey === 'days_bucket') secondaryKeys.sort((a,b)=>Number(a)-Number(b));
+          else secondaryKeys.sort((a,b)=>String(a).localeCompare(String(b)));
+          return {pivot, totals, primaryKeys, secondaryKeys};
+        }
+
+        function render(){
+          const primaryKey = primarySel.value;
+          const secondaryKey = secondarySel.value;
+          // compute pivot
+          const {pivot: pv, totals, primaryKeys, secondaryKeys} = pivot(RAW_DATASET, primaryKey, secondaryKey);
+          const topN = 20;
+          const chartPrimaryKeys = primaryKeys.slice(0, topN);
+          const bucketColors = ['rgba(214, 40, 40, 0.7)','rgba(247, 127, 0, 0.7)','rgba(252, 191, 73, 0.7)','rgba(168, 218, 142, 0.7)','rgba(75, 192, 192, 0.7)','rgba(54, 162, 235, 0.7)','rgba(153, 102, 255, 0.7)','rgba(201, 203, 207, 0.7)'];
+          const ds = secondaryKeys.map((sk,i)=>({
+            label: String(sk),
+            data: chartPrimaryKeys.map(pk => (pv.get(pk)?.get(sk)) || 0),
+            backgroundColor: bucketColors[i % bucketColors.length]
+          }));
+
+          // update chart
+          mainChart.data.labels = chartPrimaryKeys;
+          mainChart.data.datasets = ds;
+          mainChart.update();
+
+          // update titles and headers
+          document.getElementById('chartTitle').textContent = `Contributions by ${NICE_LABEL[primaryKey]||primaryKey} (Top 20), grouped by ${NICE_LABEL[secondaryKey]||secondaryKey}`;
+          document.getElementById('primaryHeader').textContent = NICE_LABEL[primaryKey]||primaryKey;
+
+          // update table head extra headers
+          const theadRow = document.querySelector('table thead tr');
+          // remove everything after first two th (primary + Total) and rebuild
+          while (theadRow.children.length > 2) theadRow.removeChild(theadRow.lastChild);
+          for (const sk of secondaryKeys) {
+            const th = document.createElement('th'); th.className = 'num'; th.textContent = String(sk); theadRow.appendChild(th);
+          }
+
+          // update table body
+          const tbody = document.querySelector('table tbody');
+          tbody.innerHTML = '';
+          for (const pk of primaryKeys) {
+            const tr = document.createElement('tr');
+            const tdPk = document.createElement('td'); tdPk.textContent = String(pk); tr.appendChild(tdPk);
+            const tdTotal = document.createElement('td'); tdTotal.className = 'num'; tdTotal.textContent = (totals.get(pk)||0).toLocaleString(); tr.appendChild(tdTotal);
+            for (const sk of secondaryKeys) {
+              const td = document.createElement('td'); td.className = 'num'; td.textContent = ((pv.get(pk)?.get(sk))||0).toLocaleString(); tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+          }
+        }
+
+        function recompute(){
+          render();
+        }
+
+        // initial render with defaults
+        render();
     </script>
 </body>
 </html>

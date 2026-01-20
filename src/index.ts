@@ -213,7 +213,6 @@ async function runScan(args: string[]) {
 }
 
 async function runHtml(args: string[]) {
-    const originalCwd = process.cwd();
     const inputPath = args[0] || path.resolve('./.git-stats/data.jsonl');
     const outHtml = path.resolve('./.git-stats/report.html');
 
@@ -228,7 +227,7 @@ async function runHtml(args: string[]) {
         try { return JSON.parse(line); } catch { return null; }
     }).filter(Boolean) as DataRow[];
 
-    generateHtmlReport(aggregatedData, outHtml, originalCwd);
+    generateHtmlReport(aggregatedData, outHtml);
     console.error(`HTML report generated: ${outHtml}`);
 }
 

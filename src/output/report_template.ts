@@ -6,7 +6,7 @@ import {DataRow, Primitive} from "../base/types";
 /**
  * Generates a self-contained, dynamic HTML report file with charts.
  */
-export function generateHtmlReport(data: DataRow[], outputFile: string, originalCwd: string) {
+export function generateHtmlReport(data: DataRow[], outputFile: string) {
     // Indices in DataRow based on current aggregation pipeline:
     // [author, days_bucket, lang, clusterPath, repoName, count]
     const groupByIdx = 0;      // primary: author
@@ -75,13 +75,16 @@ export function generateHtmlReport(data: DataRow[], outputFile: string, original
     const chartTitle = `Contributions by ${primaryHeader} (Top ${topN}), grouped by ${secondaryHeader}`;
 
     // Replace placeholders in the HTML template
-    const finalOutputPath = path.join(originalCwd, outputFile);
+    const finalOutputPath = path.join(outputFile);
+    const headerLabels = ["author","days_bucket","lang","clusterPath","repoName","count"];
     let htmlContent = htmlTemplate
         .replace('__CHART_TITLE__', chartTitle)
         .replace('__TABLE_HEADERS__', tableHeaders)
         .replace('__TABLE_ROWS__', tableRows)
         .replace('__CHART_LABELS_JSON__', JSON.stringify(chartPrimaryKeys))
-        .replace('__CHART_DATASETS_JSON__', JSON.stringify(datasets));
+        .replace('__CHART_DATASETS_JSON__', JSON.stringify(datasets))
+        .replace('__DATASET_JSON__', JSON.stringify(data))
+        .replace('__HEADER_LABELS_JSON__', JSON.stringify(headerLabels));
 
     fs.writeFileSync(finalOutputPath, htmlContent);
 }
