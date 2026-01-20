@@ -61,7 +61,7 @@ async function* forEachRepoFile(
 
     const repoName = path.basename(repoRoot);
 
-    let revisionBoundary = await findRevision(repoRoot, 1000);
+    let revisionBoundary = await findRevision(repoRoot, 5000);
 
     const finalTargetPath = path.relative(repoRoot, discoveryPath);
     const { stdout: lsFilesOut } = await execAsync(
@@ -70,10 +70,12 @@ async function* forEachRepoFile(
         { cwd: repoRoot }
     );
     const files = lsFilesOut.filter(line => line && line.length > 0);
-    let minClusterSize = Math.max(5, files.length / 1000);
+    let minClusterSize = Math.floor(Math.max(5, files.length / 1000));
+    let maxClusterSize = Math.round(Math.max(20, minClusterSize*2));
+    console.error(`Clustering ${files.length} into ${minClusterSize}..${maxClusterSize}+ sized chunks`);
     const filesClustered = clusterFiles(
         files,
-        Math.max(20, minClusterSize*2),
+        maxClusterSize,
         minClusterSize
     );
     console.error(filesClustered.map(it => `${it.path}${it.isLeftovers ? "/*" : ""} (${it.weight})`));
@@ -127,7 +129,12 @@ async function doProcessFile1(repoRoot: string, filePath: string, revisionBounda
     if (!stat || !stat.isFile() || stat.size === 0) return [];
 
     const result: DataRow[] = []
-    for (const item of await git_blame_porcelain(filePath, repoRoot, ["author", "committer-time"], revisionBoundary)) {
+    for (const item of await git_blame_porcelain(filePath, repoRoot, ["author", "committer-time", "commit"], revisionBoundary + "..HEAD")) {
+        if (revisionBoundary === item[2]) {
+            item[0] = "?"
+            item[1] = 0
+            item[2] = "0".repeat(40)
+        }
         const lang = path.extname(filePath) || 'Other';
         let days_bucket = bucket(daysAgo(item[1] as number), [0, 30, 300, 1000, 1000000]);
         if (days_bucket != -1) {
