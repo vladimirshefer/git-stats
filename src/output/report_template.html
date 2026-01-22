@@ -29,15 +29,6 @@
         const KEY_INDEX = Object.fromEntries(HEADER_LABELS.map((k,i)=>[k,i]));
         const COUNT_IDX_FROM_END = 1; // last element is count
 
-        const NICE_LABEL = {
-          author: 'Author',
-          days_bucket: 'Age (days)',
-          lang: 'Language',
-          clusterPath: 'Cluster',
-          repoName: 'Repo',
-          count: 'Count'
-        };
-
         const allKeys = HEADER_LABELS.filter(k => k !== 'count');
 
         function uniqueValues(arr, idx){
@@ -185,7 +176,7 @@
               data: chartPrimaryKeys.map(pk => (pv.get(pk)?.get(sk)) || 0),
               backgroundColor: bucketColors[i % bucketColors.length]
             }));
-            const title = `Contributions by ${NICE_LABEL[primaryKey]||primaryKey} (Top 20), grouped by ${NICE_LABEL[secondaryKey]||secondaryKey}`;
+            const title = ``;
             return { chartLabels: chartPrimaryKeys, datasets: ds, titleText: title };
           }, [filters, primaryKey, secondaryKey]);
 
@@ -199,7 +190,7 @@
                     Primary group:
                     <select value={primaryKey} onChange={e=>setPrimaryKey(e.target.value)}>
                       {allKeysLocal.map(k=> (
-                        <option key={k} value={k}>{NICE_LABEL[k]||k}</option>
+                        <option key={k} value={k}>{k}</option>
                       ))}
                     </select>
                   </label>
@@ -207,7 +198,7 @@
                     Secondary group:
                     <select value={secondaryKey} onChange={e=>setSecondaryKey(e.target.value)}>
                       {allKeysLocal.map(k=> (
-                        <option key={k} value={k}>{NICE_LABEL[k]||k}</option>
+                        <option key={k} value={k}>{k}</option>
                       ))}
                     </select>
                   </label>
@@ -216,7 +207,7 @@
                   {allKeysLocal.map(key => (
                     <MultiSelect
                       key={key}
-                      label={NICE_LABEL[key]||key}
+                      label={key}
                       values={valueOptions[key]}
                       selectedSet={filters[key]}
                       onChange={(newSet)=> setFilters(prev=>({ ...prev, [key]: newSet }))}
