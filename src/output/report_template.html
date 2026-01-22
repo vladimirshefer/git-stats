@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!--suppress TypeScriptMissingConfigOption -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -20,6 +21,8 @@
 <body>
     <div id="root"></div>
     <script type="text/babel" data-presets="react">
+        import React from "react";
+
         const RAW_DATASET =
             __DATASET_JSON__
             || [];
@@ -150,8 +153,8 @@
             return f;
           }, []);
           const [filters, setFilters] = React.useState(initialFilters);
-          const [primaryKey, setPrimaryKey] = React.useState('author');
-          const [secondaryKey, setSecondaryKey] = React.useState('days_bucket');
+            const [primaryKeyIndex, setPrimaryKeyIndex] = React.useState(0);
+            const [secondaryKeyIndex, setSecondaryKeyIndex] = React.useState(1);
 
           const valueOptions = React.useMemo(()=>{
             const map = {};
@@ -167,8 +170,13 @@
           }, []);
 
           const { chartLabels, datasets, titleText } = React.useMemo(()=>{
-            const { pivot: pv, totals, primaryKeys, secondaryKeys } = pivot(RAW_DATASET, primaryKey, secondaryKey, filters);
-            const topN = 20;
+              const {
+                  pivot: pv,
+                  totals,
+                  primaryKeys,
+                  secondaryKeys
+              } = pivot(RAW_DATASET, HEADER_LABELS[primaryKeyIndex], HEADER_LABELS[secondaryKeyIndex], filters);
+              const topN = 20;
             const chartPrimaryKeys = primaryKeys.slice(0, topN);
             const bucketColors = ['rgba(214, 40, 40, 0.7)','rgba(247, 127, 0, 0.7)','rgba(252, 191, 73, 0.7)','rgba(168, 218, 142, 0.7)','rgba(75, 192, 192, 0.7)','rgba(54, 162, 235, 0.7)','rgba(153, 102, 255, 0.7)','rgba(201, 203, 207, 0.7)'];
             const ds = secondaryKeys.map((sk,i)=>({
@@ -178,7 +186,7 @@
             }));
             const title = ``;
             return { chartLabels: chartPrimaryKeys, datasets: ds, titleText: title };
-          }, [filters, primaryKey, secondaryKey]);
+          }, [filters, primaryKeyIndex, secondaryKeyIndex]);
 
           return (
             <div className="container">
@@ -188,18 +196,18 @@
                 <div style={{ display:'flex', gap:'16px', flexWrap:'wrap', alignItems:'center' }}>
                   <label>
                     Primary group:
-                    <select value={primaryKey} onChange={e=>setPrimaryKey(e.target.value)}>
-                      {allKeysLocal.map(k=> (
-                        <option key={k} value={k}>{k}</option>
-                      ))}
-                    </select>
+                      <select value={primaryKeyIndex} onChange={e => setPrimaryKeyIndex(Number(e.target.value))}>
+                          {allKeysLocal.map((k, i) => (
+                              <option key={k} value={i}>{k}</option>
+                          ))}
+                      </select>
                   </label>
-                  <label>
-                    Secondary group:
-                    <select value={secondaryKey} onChange={e=>setSecondaryKey(e.target.value)}>
-                      {allKeysLocal.map(k=> (
-                        <option key={k} value={k}>{k}</option>
-                      ))}
+                    <label>
+                        Secondary group:
+                        <select value={secondaryKeyIndex} onChange={e => setSecondaryKeyIndex(Number(e.target.value))}>
+                            {allKeysLocal.map((k, i) => (
+                                <option key={k} value={i}>{k}</option>
+                            ))}
                     </select>
                   </label>
                 </div>
