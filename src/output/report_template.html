@@ -27,6 +27,17 @@
         const COUNT_IDX_FROM_END = 1; // last element is count
 
         const allKeys = HEADER_LABELS.filter(k => k !== 'count');
+        const TOP_N = 20;
+        const BUCKET_COLORS = [
+            'rgba(214, 40, 40, 0.7)',
+            'rgba(247, 127, 0, 0.7)',
+            'rgba(252, 191, 73, 0.7)',
+            'rgba(168, 218, 142, 0.7)',
+            'rgba(75, 192, 192, 0.7)',
+            'rgba(54, 162, 235, 0.7)',
+            'rgba(153, 102, 255, 0.7)',
+            'rgba(201, 203, 207, 0.7)'
+        ];
 
         function uniqueValues(arr, idx){
           const set = new Set(arr.map(r => r[idx]));
@@ -54,16 +65,13 @@
             const sk = row[secondaryKeyIndex];
             const count = Number(row[row.length - COUNT_IDX_FROM_END]) || 0;
             if (!pivot.has(pk)) pivot.set(pk, new Map());
-            const inner = pivot.get(pk);
-            inner.set(sk, (inner.get(sk)||0)+count);
-            totals.set(pk, (totals.get(pk)||0)+count);
-            secValuesSet.add(sk);
+              pivot.get(pk).set(sk, (pivot.get(pk).get(sk) || 0) + count);
+              totals.set(pk, (totals.get(pk) || 0) + count);
+              secValuesSet.add(sk);
           }
-          let primaryKeys = Array.from(pivot.keys());
-          primaryKeys.sort((a,b)=> (totals.get(b)||0) - (totals.get(a)||0));
-          let secondaryKeys = Array.from(secValuesSet);
-          secondaryKeys.sort((a,b)=>String(a).localeCompare(String(b)));
-          return {pivot, totals, primaryKeys, secondaryKeys};
+            const primaryKeys = Array.from(pivot.keys()).sort((a, b) => (totals.get(b) || 0) - (totals.get(a) || 0));
+            const secondaryKeys = Array.from(secValuesSet).sort((a, b) => String(a).localeCompare(String(b)));
+            return {pivot, totals, primaryKeys, secondaryKeys};
         }
 
         // ---------- React Components ----------
@@ -126,63 +134,52 @@
                   onChange(new Set(chosen));
                 }}
               >
-                {values.map(v=> (
-                  <option key={String(v)} value={String(v)} selected={selectedSet.has(String(v))}>
-                    {String(v)}
-                  </option>
-                ))}
+                  {values.map(v => {
+                      const strVal = String(v);
+                      return (
+                          <option key={strVal} value={strVal} selected={selectedSet.has(strVal)}>
+                              {strVal}
+                          </option>
+                      );
+                  })}
               </select>
             </div>
           );
         }
 
         function App(){
-          const allKeysLocal = allKeys;
-          // initialize filters with all selected
-          const initialFilters = React.useMemo(()=>{
-            const f = {};
-            for (const key of allKeysLocal) {
-              const idx = KEY_INDEX[key];
-              const values = uniqueValues(RAW_DATASET, idx);
-              f[key] = new Set(values.map(v=>String(v)));
-            }
-            return f;
-          }, []);
-          const [filters, setFilters] = React.useState(initialFilters);
+            const {initialFilters, valueOptions} = React.useMemo(() => {
+                const filters = {};
+                const options = {};
+                for (const key of allKeys) {
+                    const idx = KEY_INDEX[key];
+                    const values = uniqueValues(RAW_DATASET, idx).sort((a, b) => {
+                        if (key === 'days_bucket') return Number(a) - Number(b);
+                        return String(a).localeCompare(String(b));
+                    });
+                    filters[key] = new Set(values.map(v => String(v)));
+                    options[key] = values;
+                }
+                return {initialFilters: filters, valueOptions: options};
+            }, []);
+            const [filters, setFilters] = React.useState(initialFilters);
             const [primaryKeyIndex, setPrimaryKeyIndex] = React.useState(0);
             const [secondaryKeyIndex, setSecondaryKeyIndex] = React.useState(1);
 
-            const valueOptions = React.useMemo(()=>{
-            const map = {};
-            for (const key of allKeysLocal) {
-              const idx = KEY_INDEX[key];
-              const values = uniqueValues(RAW_DATASET, idx).sort((a,b)=>{
-                if (key==='days_bucket') return Number(a)-Number(b);
-                return String(a).localeCompare(String(b));
-              });
-              map[key] = values;
-            }
-            return map;
-          }, []);
-
-          const { chartLabels, datasets, titleText } = React.useMemo(()=>{
-              const {
-                  pivot: pv,
-                  totals,
-                  primaryKeys,
-                  secondaryKeys
-              } = pivot(RAW_DATASET, primaryKeyIndex, secondaryKeyIndex, filters);
-              const topN = 20;
-            const chartPrimaryKeys = primaryKeys.slice(0, topN);
-            const bucketColors = ['rgba(214, 40, 40, 0.7)','rgba(247, 127, 0, 0.7)','rgba(252, 191, 73, 0.7)','rgba(168, 218, 142, 0.7)','rgba(75, 192, 192, 0.7)','rgba(54, 162, 235, 0.7)','rgba(153, 102, 255, 0.7)','rgba(201, 203, 207, 0.7)'];
-            const ds = secondaryKeys.map((sk,i)=>({
-              label: String(sk),
-              data: chartPrimaryKeys.map(pk => (pv.get(pk)?.get(sk)) || 0),
-              backgroundColor: bucketColors[i % bucketColors.length]
-            }));
-            const title = ``;
-            return { chartLabels: chartPrimaryKeys, datasets: ds, titleText: title };
-          }, [filters, primaryKeyIndex, secondaryKeyIndex]);
+            const {chartLabels, datasets} = React.useMemo(() => {
+                const {
+                    pivot: pv,
+                    primaryKeys,
+                    secondaryKeys
+                } = pivot(RAW_DATASET, primaryKeyIndex, secondaryKeyIndex, filters);
+                const chartPrimaryKeys = primaryKeys.slice(0, TOP_N);
+                const ds = secondaryKeys.map((sk, i) => ({
+                    label: String(sk),
+                    data: chartPrimaryKeys.map(pk => (pv.get(pk)?.get(sk)) || 0),
+                    backgroundColor: BUCKET_COLORS[i % BUCKET_COLORS.length]
+                }));
+                return {chartLabels: chartPrimaryKeys, datasets: ds};
+            }, [filters, primaryKeyIndex, secondaryKeyIndex]);
 
             return (
                 <div className="max-w-4xl mx-auto my-5 p-5 bg-white rounded-lg shadow-sm">
@@ -193,25 +190,26 @@
                         <label>
                     Primary group:
                       <select value={primaryKeyIndex} onChange={e => setPrimaryKeyIndex(Number(e.target.value))}>
-                          {allKeysLocal.map((k, i) => (
-                              <option key={k} value={i}>{k}</option>
+                          {allKeys.map((__, i) => (
+                              <option key={i} value={i}>{HEADER_LABELS[i]}</option>
                           ))}
                       </select>
-                  </label>
-                    <label>
-                        Secondary group:
-                        <select value={secondaryKeyIndex} onChange={e => setSecondaryKeyIndex(Number(e.target.value))}>
-                            {allKeysLocal.map((k, i) => (
-                                <option key={k} value={i}>{k}</option>
-                            ))}
-                    </select>
-                  </label>
-                </div>
+                        </label>
+                            <label>
+                                Secondary group:
+                                <select value={secondaryKeyIndex}
+                                        onChange={e => setSecondaryKeyIndex(Number(e.target.value))}>
+                                    {allKeys.map((__, i) => (
+                                        <option key={i} value={i}>{HEADER_LABELS[i]}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        </div>
                         <div id="filters" className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
-                        {allKeysLocal.map(key => (
-                    <MultiSelect
-                      key={key}
-                      label={key}
+                            {allKeys.map((key, idx) => (
+                                    <MultiSelect
+                      key={idx}
+                      label={HEADER_LABELS[idx]}
                       values={valueOptions[key]}
                       selectedSet={filters[key]}
                       onChange={(newSet)=> setFilters(prev=>({ ...prev, [key]: newSet }))}
@@ -220,7 +218,7 @@
                 </div>
               </div>
                     <div className="mt-5">
-                        <h2 id="chartTitle" className="border-b border-gray-300 pb-2.5">{titleText}</h2>
+                        <h2 id="chartTitle" className="border-b border-gray-300 pb-2.5">Chart</h2>
                         <ChartView labels={chartLabels} datasets={datasets} />
               </div>
             </div>
