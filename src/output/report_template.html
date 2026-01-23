@@ -122,32 +122,95 @@
     }
 
     function MultiSelect({label, values, selectedSet, onChange}) {
+        const [isOpen, setIsOpen] = React.useState(false);
+        const [searchTerm, setSearchTerm] = React.useState('');
+        const dropdownRef = React.useRef(null);
+
+        React.useEffect(() => {
+            function handleClickOutside(event) {
+                if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                    setIsOpen(false);
+                }
+            }
+
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }, []);
+
+        const filteredValues = React.useMemo(() => {
+            if (!searchTerm) return values;
+            const lower = searchTerm.toLowerCase();
+            return values.filter(v => String(v).toLowerCase().includes(lower));
+        }, [values, searchTerm]);
+
         const selCount = selectedSet.size;
         const total = values.length;
+
+        const toggleValue = (strVal) => {
+            const newSet = new Set(selectedSet);
+            if (newSet.has(strVal)) {
+                newSet.delete(strVal);
+            } else {
+                newSet.add(strVal);
+            }
+            onChange(newSet);
+        };
+
         return (
-            <div>
+            <div ref={dropdownRef} className="relative">
                 <label className="block font-semibold mb-1.5">
                     {label}{' '}
                     <span className="text-gray-600 font-normal">({selCount}/{total})</span>
                 </label>
-                <select
-                    multiple
-                    size={Math.min(8, Math.max(3, values.length))}
-                    className="w-full"
-                    onChange={(e) => {
-                        const chosen = Array.from(e.target.selectedOptions).map(o => o.value);
-                        onChange(new Set(chosen));
-                    }}
+                <button
+                    type="button"
+                    onClick={() => setIsOpen(!isOpen)}
+                    className="w-full px-3 py-2 text-left bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                    {values.map(v => {
-                        const strVal = String(v);
-                        return (
-                            <option key={strVal} value={strVal} selected={selectedSet.has(strVal)}>
-                                {strVal}
-                            </option>
-                        );
-                    })}
-                </select>
+                    <span className="text-gray-700">
+                        {selCount === 0 ? 'Select...' : selCount === total ? 'All selected' : `${selCount} selected`}
+                    </span>
+                    <span className="float-right">▼</span>
+                </button>
+                {isOpen && (
+                    <div
+                        className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-80 overflow-hidden">
+                        <div className="p-2 border-b border-gray-200">
+                            <input
+                                type="text"
+                                placeholder="Search..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        </div>
+                        <div className="overflow-y-auto max-h-64">
+                            {filteredValues.length === 0 ? (
+                                <div className="px-3 py-2 text-gray-500 text-center">No matches found</div>
+                            ) : (
+                                filteredValues.map(v => {
+                                    const strVal = String(v);
+                                    const isChecked = selectedSet.has(strVal);
+                                    return (
+                                        <label
+                                            key={strVal}
+                                            className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => toggleValue(strVal)}
+                                                className="mr-2 h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                            />
+                                            <span className="text-gray-900">{strVal}</span>
+                                        </label>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
