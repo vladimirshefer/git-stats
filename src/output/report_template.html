@@ -138,6 +138,7 @@
             if (ok) filtered.push(row);
         }
 
+        const PSEUDO_ROOT = "@";
         // Aggregate counts per path and propagate sums up the tree
         const LEAF_IDX = KEY_INDEX['clusterPath'];
         const COUNT_IDX = HEADER_LABELS.length - COUNT_IDX_FROM_END;
@@ -145,7 +146,7 @@
         const allPaths = new Set(); // includes all prefixes (no empty)
 
         for (const row of filtered) {
-            const rawPath = String(row[LEAF_IDX] ?? '').trim();
+            const rawPath = String(PSEUDO_ROOT + "/" + row[LEAF_IDX] ?? '').trim();
             const cnt = Number(row[COUNT_IDX]) || 0;
             if (!rawPath) continue;
             const segs = rawPath.split('/').filter(s => s && s !== '.');
