@@ -15,8 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
 import {findRevision, git_blame_porcelain, git_ls_files, isGitRepo} from "./git";
-import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
-import {AsyncGeneratorUtil, AsyncIteratorWrapperImpl} from "./util/AsyncGeneratorUtil";
+import {AsyncGeneratorUtil, streamOf} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
 import {DataRow} from "./base/types";
 import {distinctCount} from "./util/dataset";
@@ -126,7 +125,7 @@ async function doProcessFile1(absoluteRepoRoot: string, repoRelativeFilePath: st
     if (!stat || !stat.isFile() || stat.size === 0) return [];
 
     const result: DataRow[] = []
-    for (const item of await git_blame_porcelain(repoRelativeFilePath, absoluteRepoRoot, ["author", "committer-time", "commit"], revisionBoundary + "..HEAD")) {
+    for (const item of await git_blame_porcelain(repoRelativeFilePath, absoluteRepoRoot, ["author", "committer-time", "commit"], (!!revisionBoundary ? revisionBoundary + "..HEAD" : undefined))) {
         if (revisionBoundary === item[2]) {
             item[0] = "?"
             item[1] = 0
@@ -157,9 +156,19 @@ function getRepoPathsToProcess(inputPaths: string[]): string[] {
     return repoPathsToProcess;
 }
 
-async function runScan(args: string[]) {
-    const tmpVfs: VirtualFileSystem = new RealFileSystemImpl("./.git-stats/");
+async function * runScan1(args: string[]): AsyncGenerator<DataRow> {
+    const inputPaths = (args && args.length > 0) ? args : ['.'];
+    let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
+    let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
+        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath, doProcessFile1))
+        .map(it => [it[0], it[1], it[2], it[5], path.basename(it[4] as string)])
+        .get();
+
+    return distinctCount(dataSet);
+}
+
+async function runScan(args: string[]) {
     process.on('SIGINT', () => {
         if (sigintCaught) {
             console.error("\nForcing exit.");
@@ -169,17 +178,7 @@ async function runScan(args: string[]) {
         console.error("\nSignal received. Finishing current file then stopping. Press Ctrl+C again to exit immediately.");
     });
 
-    const inputPaths = (args && args.length > 0) ? args : ['.'];
-    let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
-
-    await tmpVfs.write("data.jsonl", "");
-
-    let dataSet = new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.of(repoPathsToProcess))
-        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath, doProcessFile1))
-        .map(it => [it[0], it[1], it[2], it[5], path.basename(it[4] as string)])
-        .get();
-
-    let aggregatedData1 = distinctCount(dataSet);
+    let aggregatedData1 = runScan1(args);
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
     // Keep current behavior: write aggregated data into .git-stats/data.jsonl

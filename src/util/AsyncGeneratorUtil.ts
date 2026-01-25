@@ -91,3 +91,7 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
         }
     }
 }
+
+export function streamOf<T>(source: AsyncGenerator<T>): AsyncIteratorWrapper<T> {
+    return new AsyncIteratorWrapperImpl(source);
+}
