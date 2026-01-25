@@ -11,15 +11,15 @@
  * 4.  **Output Formatting:** Renders the aggregated data as an HTML report or a CSV file.
  */
 import {execSync} from 'child_process';
-import {execAsync} from './util/exec';
 import * as fs from 'fs';
 import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
-import {findRevision, git_blame_porcelain, isGitRepo} from "./git";
+import {findRevision, git_blame_porcelain, git_ls_files, isGitRepo} from "./git";
 import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
 import {AsyncGeneratorUtil, AsyncIteratorWrapperImpl} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
 import {DataRow} from "./base/types";
+import {distinctCount} from "./util/dataset";
 
 let sigintCaught = false;
 
@@ -63,13 +63,7 @@ async function* forEachRepoFile(
 
     let revisionBoundary = await findRevision(repoRoot, 1000);
 
-    const finalTargetPath = path.relative(repoRoot, discoveryPath);
-    const { stdout: lsFilesOut } = await execAsync(
-        'git',
-        ['ls-files', '--', finalTargetPath || '.'],
-        { cwd: repoRoot }
-    );
-    const files = lsFilesOut.filter(line => line && line.length > 0);
+    const files = await git_ls_files(repoRoot, path.relative(repoRoot, discoveryPath));
     let minClusterSize = Math.floor(Math.max(5, files.length / 1000));
     let maxClusterSize = Math.round(Math.max(20, minClusterSize*2));
     console.error(`Clustering ${files.length} into ${minClusterSize}..${maxClusterSize}+ sized chunks`);
@@ -142,32 +136,6 @@ async function doProcessFile1(repoRoot: string, filePath: string, revisionBounda
         }
     }
     return result;
-}
-
-/**
- * Counts distinct rows in an async generator and appends the count to each row.
- */
-export async function* distinctCount(
-    source: AsyncGenerator<DataRow>
-): AsyncGenerator<DataRow> {
-    // Map to store counts of serialized rows
-    const map = new Map<string, { row: DataRow; count: number }>();
-
-    for await (const row of source) {
-        // Serialize the row to use as a Map key
-        const key = JSON.stringify(row);
-
-        if (map.has(key)) {
-            map.get(key)!.count += 1;
-        } else {
-            map.set(key, { row, count: 1 });
-        }
-    }
-
-    // Yield each distinct row with its count appended
-    for (const { row, count } of map.values()) {
-        yield [...row, count];
-    }
 }
 
 function getRepoPathsToProcess(inputPaths: string[]): string[] {

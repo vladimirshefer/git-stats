@@ -170,3 +170,12 @@ export async function findRevision(repoRoot: string, commitsBack: number): Promi
     }
     return undefined;
 }
+
+export async function git_ls_files(repoRootPath: string, subdirPath: string) {
+    const {stdout: lsFilesOut} = await execAsync(
+        'git',
+        ['ls-files', '--', subdirPath || '.'],
+        {cwd: repoRootPath}
+    );
+    return lsFilesOut.filter(line => line && line.length > 0);
+}
