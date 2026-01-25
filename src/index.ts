@@ -10,12 +10,11 @@
  * 3.  **Aggregation:** Consumes the stream to group stats based on configurable dimensions.
  * 4.  **Output Formatting:** Renders the aggregated data as an HTML report or a CSV file.
  */
-import {execSync} from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
 import {findRevision, git_blame_porcelain, git_ls_files, isGitRepo} from "./git";
-import {AsyncGeneratorUtil, streamOf} from "./util/AsyncGeneratorUtil";
+import {AsyncGeneratorUtil, stream, streamOf} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
 import {DataRow} from "./base/types";
 import {distinctCount} from "./util/dataset";
@@ -41,31 +40,12 @@ async function* forEachRepoFile(
 ): AsyncGenerator<DataRow> {
     console.error(`\nProcessing repository: ${repoRelativePath || '.'}`);
 
-    const originalCwd = process.cwd();
-    const absoluteDiscoveryPath = path.resolve(originalCwd, repoRelativePath);
-    if (!fs.existsSync(absoluteDiscoveryPath)) {
-        console.error(`Error: Path does not exist: ${absoluteDiscoveryPath}. Skipping.`);
-        return;
-    }
+    const absoluteRepoPath = path.resolve(process.cwd(), repoRelativePath);
+    const repoName = path.basename(absoluteRepoPath);
 
-    const absoluteGitCommandPath = fs.statSync(absoluteDiscoveryPath).isDirectory() ? absoluteDiscoveryPath : path.dirname(absoluteDiscoveryPath);
+    let revisionBoundary = await findRevision(absoluteRepoPath, 1000);
 
-    let absoluteRepoRoot: string;
-    try {
-        absoluteRepoRoot = execSync('git rev-parse --show-toplevel', {
-            cwd: absoluteGitCommandPath,
-            stdio: 'pipe'
-        }).toString().trim();
-    } catch (e) {
-        console.error(`Error: Could not find git repository at ${absoluteGitCommandPath}. Skipping.`);
-        return;
-    }
-
-    const repoName = path.basename(absoluteRepoRoot);
-
-    let revisionBoundary = await findRevision(absoluteRepoRoot, 1000);
-
-    const files = await git_ls_files(absoluteRepoRoot, path.relative(absoluteRepoRoot, absoluteDiscoveryPath));
+    const files = await git_ls_files(absoluteRepoPath, ".");
     let minClusterSize = Math.floor(Math.max(5, files.length / 1000));
     let maxClusterSize = Math.round(Math.max(20, minClusterSize * 2));
     console.error(`Clustering ${files.length} into ${minClusterSize}..${maxClusterSize}+ sized chunks`);
@@ -89,7 +69,7 @@ async function* forEachRepoFile(
 
         try {
             let clusterPath = clusterPaths.find(it => file.startsWith(it)) ?? "$$$unknown$$$";
-            yield* (await doProcessFile(absoluteRepoRoot, file, revisionBoundary)).map(it => it.concat(clusterPath) as DataRow);
+            yield [absoluteRepoPath, file, revisionBoundary, clusterPath] as DataRow;
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
             // Silently skip files that error
@@ -100,20 +80,7 @@ async function* forEachRepoFile(
     console.error(`Analysis complete for '${repoName}'.`);
 }
 
-function daysAgo(epoch: number): number {
-    const now = Date.now();
-    const diff = now - (epoch * 1000);
-    return Math.floor(diff / (1000 * 60 * 60 * 24));
-}
-
-function bucket(n: number, buckets: number[]): number {
-    for (let i = 1; i < buckets.length; i++) {
-        if (n > buckets[i-1] && n < buckets[i]) return buckets[i - 1];
-    }
-    return -1;
-}
-
-async function doProcessFile1(absoluteRepoRoot: string, repoRelativeFilePath: string, revisionBoundary?: string): Promise<DataRow[]> {
+async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: string, revisionBoundary?: string): Promise<DataRow[]> {
     if (!repoRelativeFilePath) return [];
     const absoluteFilePath = path.join(absoluteRepoRoot, repoRelativeFilePath);
     let stat: fs.Stats | null = null;
@@ -132,7 +99,7 @@ async function doProcessFile1(absoluteRepoRoot: string, repoRelativeFilePath: st
             item[2] = "0".repeat(40)
         }
         const lang = path.extname(repoRelativeFilePath) || 'Other';
-        let days_bucket = bucket(daysAgo(item[1] as number), [0, 30, 300, 1000, 1000000]);
+        let days_bucket = util.bucket(util.daysAgo(item[1] as number), [0, 30, 300, 1000, 1000000]);
         if (days_bucket != -1) {
             result.push([item[0], days_bucket, lang, repoRelativeFilePath, absoluteRepoRoot]);
         }
@@ -140,13 +107,9 @@ async function doProcessFile1(absoluteRepoRoot: string, repoRelativeFilePath: st
     return result;
 }
 
-function distinct<T>(arr: T[]): T[] {
-    return [...new Set(arr)];
-}
-
 function getRepoPathsToProcess(inputPaths: string[]): string[] {
     let repoPathsToProcess: string[] = inputPaths.flatMap(it => findRepositories(it, 3));
-    repoPathsToProcess = distinct(repoPathsToProcess).sort();
+    repoPathsToProcess = util.distinct(repoPathsToProcess).sort();
     if (repoPathsToProcess.length === 0) {
         throw new Error("No git repositories found to analyze.");
     }
@@ -161,7 +124,11 @@ function runScan1(args: string[]): AsyncGenerator<DataRow> {
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
     let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
-        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath, doProcessFile1))
+        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath, doProcessFile))
+        .flatMap(fileInfo => {
+            let linesInfo = stream.ofArrayPromise(doProcessFile(fileInfo[0] as string, fileInfo[1] as string, fileInfo[2] as string));
+            return linesInfo.map(it => it.concat(fileInfo[3]) as DataRow).get();
+        })
         .map(it => [it[0], it[1], it[2], it[5], path.basename(it[4] as string)])
         .get();
 
@@ -214,7 +181,7 @@ function findRepositories(absolutePath: string, depth: number): string[] {
     if (!fs.statSync(absolutePath).isDirectory()) return [];
     if (isGitRepo(absolutePath)) return [absolutePath];
     let result = getDirectories(absolutePath).flatMap(dir => findRepositories(dir, depth - 1));
-    return distinct(result).sort();
+    return util.distinct(result).sort();
 }
 
 // --- Main Application Controller ---
@@ -251,3 +218,23 @@ async function main() {
 
 // --- Entry Point ---
 main().catch(console.error);
+
+// --- Utility Functions ---
+namespace util {
+    export function distinct<T>(arr: T[]): T[] {
+        return [...new Set(arr)];
+    }
+
+    export function daysAgo(epoch: number): number {
+        const now = Date.now();
+        const diff = now - (epoch * 1000);
+        return Math.floor(diff / (1000 * 60 * 60 * 24));
+    }
+
+    export function bucket(n: number, buckets: number[]): number {
+        for (let i = 1; i < buckets.length; i++) {
+            if (n > buckets[i-1] && n < buckets[i]) return buckets[i - 1];
+        }
+        return -1;
+    }
+}

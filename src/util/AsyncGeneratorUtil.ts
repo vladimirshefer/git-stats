@@ -95,3 +95,16 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
 export function streamOf<T>(source: AsyncGenerator<T>): AsyncIteratorWrapper<T> {
     return new AsyncIteratorWrapperImpl<T>(source);
 }
+
+export namespace stream {
+    export function ofArrayPromise<T>(p: Promise<T[]>): AsyncIteratorWrapper<T> {
+        async function* __ofArrayPromise<T>(p: Promise<T[]>): AsyncGenerator<T> {
+            const items = await p;
+            for (const item of items) {
+                yield item;
+            }
+        }
+        return streamOf(__ofArrayPromise(p))
+    }
+
+}
