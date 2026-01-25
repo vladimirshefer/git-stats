@@ -152,11 +152,11 @@ function getRepoPathsToProcess(inputPaths: string[]): string[] {
     }
 
     console.error(`Found ${repoPathsToProcess.length} repositories to analyze:`);
-    repoPathsToProcess.forEach(p => console.error(`- ${p || '.'}`));
+    repoPathsToProcess.forEach(p => console.error(`- ${p ?? '.'}`));
     return repoPathsToProcess;
 }
 
-async function * runScan1(args: string[]): AsyncGenerator<DataRow> {
+function runScan1(args: string[]): AsyncGenerator<DataRow> {
     const inputPaths = (args && args.length > 0) ? args : ['.'];
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 

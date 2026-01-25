@@ -74,7 +74,7 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
     }
 
     map<R>(mapper: (item: T) => R): AsyncIteratorWrapper<R> {
-        return new AsyncIteratorWrapperImpl<R>((async function* <T, R>(source: AsyncIterable<T>, mapper: (item: T) => R): AsyncGenerator<R> {
+        return streamOf<R>((async function* <T, R>(source: AsyncIterable<T>, mapper: (item: T) => R): AsyncGenerator<R> {
             for await (const item of source) {
                 yield mapper(item);
             }
@@ -82,7 +82,7 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
     }
 
     flatMap<R>(mapper: (item: T) => AsyncGenerator<R>): AsyncIteratorWrapper<R> {
-        return new AsyncIteratorWrapperImpl(AsyncGeneratorUtil.flatMap(this.source, mapper))
+        return streamOf(AsyncGeneratorUtil.flatMap(this.source, mapper))
     }
 
     async forEach(consumer: (item: T) => void | Promise<void>): Promise<void> {
@@ -93,5 +93,5 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
 }
 
 export function streamOf<T>(source: AsyncGenerator<T>): AsyncIteratorWrapper<T> {
-    return new AsyncIteratorWrapperImpl(source);
+    return new AsyncIteratorWrapperImpl<T>(source);
 }
