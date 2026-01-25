@@ -34,10 +34,7 @@ function getDirectories(absoluteDirPath: string): string[] {
     }
 }
 
-async function* forEachRepoFile(
-    repoRelativePath: string,
-    doProcessFile: (absoluteRepoRoot: string, fileName: string, revisionBoundary: string | undefined) => Promise<DataRow[]>
-): AsyncGenerator<DataRow> {
+async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<DataRow> {
     console.error(`\nProcessing repository: ${repoRelativePath || '.'}`);
 
     const absoluteRepoPath = path.resolve(process.cwd(), repoRelativePath);
@@ -124,7 +121,7 @@ function runScan1(args: string[]): AsyncGenerator<DataRow> {
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
     let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
-        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath, doProcessFile))
+        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath))
         .flatMap(fileInfo => {
             let linesInfo = stream.ofArrayPromise(doProcessFile(fileInfo[0] as string, fileInfo[1] as string, fileInfo[2] as string));
             return linesInfo.map(it => it.concat(fileInfo[3]) as DataRow).get();
