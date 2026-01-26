@@ -58,35 +58,37 @@
 
     function pivot(
         dataset,
-        primaryKeyIndex,
-        secondaryKeyIndex,
+        column1,
+        column2,
         filterState
     ) {
-        const pivot = new Map();
-        const totals = new Map();
+        const grouped2 = new Map();
+        const grouped1 = new Map();
         const secValuesSet = new Set();
-        for (const row of dataset) {
-            let ok = true;
+        let filteredDataset = dataset.filter(row => {
             for (const key of allKeys) {
                 const idx = KEY_INDEX[key];
                 const sel = filterState[key];
                 if (sel && !sel.has(String(row[idx]))) {
-                    ok = false;
-                    break;
+                    return false;
                 }
             }
-            if (!ok) continue;
-            const pk = row[primaryKeyIndex];
-            const sk = row[secondaryKeyIndex];
+            return true;
+        });
+        for (const row of filteredDataset) {
+            const c1 = row[column1];
+            const c2 = row[column2];
             const count = Number(row[row.length - COUNT_IDX_FROM_END]) || 0;
-            if (!pivot.has(pk)) pivot.set(pk, new Map());
-            pivot.get(pk).set(sk, (pivot.get(pk).get(sk) || 0) + count);
-            totals.set(pk, (totals.get(pk) || 0) + count);
-            secValuesSet.add(sk);
+            if (!grouped2.has(c1)) grouped2.set(c1, new Map());
+            grouped2.get(c1).set(c2, (grouped2.get(c1).get(c2) || 0) + count);
+
+            grouped1.set(c1, (grouped1.get(c1) || 0) + count);
+
+            secValuesSet.add(c2);
         }
-        const primaryKeys = Array.from(pivot.keys()).sort((a, b) => (totals.get(b) || 0) - (totals.get(a) || 0));
+        const primaryKeys = Array.from(grouped2.keys()).sort((a, b) => (grouped1.get(b) || 0) - (grouped1.get(a) || 0));
         const secondaryKeys = Array.from(secValuesSet).sort((a, b) => String(a).localeCompare(String(b)));
-        return {pivot, totals, primaryKeys, secondaryKeys};
+        return {grouped2, grouped1, primaryKeys, secondaryKeys};
     }
 
     // ---------- React Components ----------
@@ -378,7 +380,7 @@
 
         const {chartLabels, datasets} = React.useMemo(() => {
             const {
-                pivot: pv,
+                grouped2: pv,
                 primaryKeys,
                 secondaryKeys
             } = pivot(RAW_DATASET, primaryKeyIndex, secondaryKeyIndex, filters);
