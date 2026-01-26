@@ -48,29 +48,6 @@
 
     console.log("UN", COLUMNS_IDX_ARRAY)
 
-    function property(initialValue) {
-        let value = initialValue;
-        const listeners = new Set();
-
-        return Object.freeze({
-            get() {
-                return value;
-            },
-
-            set(newValue) {
-                if (Object.is(value, newValue)) return;
-                value = newValue;
-                listeners.forEach(fn => fn(value));
-            },
-
-            listen(fn) {
-                listeners.add(fn);
-                // optional: return unsubscribe function
-                return () => listeners.delete(fn);
-            }
-        });
-    }
-
     const TOP_N = 20;
     const BUCKET_COLORS = [
         'rgba(214, 40, 40, 0.7)',
