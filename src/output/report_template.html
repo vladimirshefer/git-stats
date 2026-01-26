@@ -140,8 +140,11 @@
     function ColumnTotalCard({columnName, columnIdx, keys, values, totals, contributions}) {
         const containerRef = React.useRef(null);
 
-        const labels = React.useMemo(() => {
-            return keys.map((k) => {
+        const {labels, hoverText} = React.useMemo(() => {
+            const labels = [];
+            const hoverText = [];
+
+            keys.forEach((k) => {
                 const total = totals.get(k);
                 const keyContribs = contributions.get(k);
                 const topContribs = [];
@@ -153,17 +156,20 @@
                         const top3 = Array.from(otherColMap.entries())
                             .sort((a, b) => b[1] - a[1])
                             .slice(0, 3)
-                            .map(([val, cnt]) => `${val}(${(cnt/total*100.0).toFixed(1)}%)`)
+                            .map(([val, cnt]) => `${val}(${(cnt / total * 100.0).toFixed(1)}%)`)
                             .join('<br>-');
                         if (top3) {
-                            topContribs.push(`${RAW_DATASET_SCHEMA[otherIdx]}<br>-`+top3);
+                            topContribs.push(`${RAW_DATASET_SCHEMA[otherIdx]}<br>-` + top3);
                         }
                     }
                 }
 
                 const label = `${String(k)} (${total})`;
-                return topContribs.length > 0 ? `${label}<br>${topContribs.join('<br>')}` : label;
+                labels.push(label);
+                hoverText.push(topContribs.length > 0 ? `${label}<br>${topContribs.join('<br>')}` : label);
             });
+
+            return {labels, hoverText};
         }, [columnName, columnIdx, keys, totals, contributions]);
 
         React.useEffect(() => {
@@ -178,6 +184,8 @@
                 labels: labels,
                 parents: labels.map(() => ''),
                 values: values,
+                hovertext: hoverText,
+                hovertemplate: '%{hovertext}<extra></extra>',
                 branchvalues: 'total'
             };
             const layout = {
@@ -190,7 +198,7 @@
             if (window.Plotly && window.Plotly.newPlot) {
                 window.Plotly.newPlot(el, [trace], layout, config);
             }
-        }, [labels, values]);
+        }, [labels, hoverText, values]);
 
         return (
             <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
