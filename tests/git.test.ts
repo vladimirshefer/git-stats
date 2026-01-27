@@ -1,4 +1,3 @@
-import {clusterFiles} from "../src/util/file_tree_clustering";
 import {parsePorcelain} from "../src/git";
 
 describe('test git blame porcelain', () => {

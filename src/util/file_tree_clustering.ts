@@ -63,7 +63,7 @@ export namespace graph {
             return false
         }
 
-        if (graphNode.size <= clusterMaxSize) {
+        if (graphNode.size < clusterMaxSize) {
             let allFiles = flatten(graphNode);
             graphNode.children = {}
             graphNode.value = allFiles;
@@ -147,7 +147,7 @@ export function clusterFiles(
     clusterMinSize: number
 ): FileTreeCluster[] {
 
-    let fileInfos = files.map(it => {
+    let fileInfos = files.sort().map(it => {
         let arr = it.split("/");
         return ({arr: arr, str: it}) as FileInfo;
     });
@@ -169,7 +169,7 @@ export function clusterFiles(
         let files1 = files.map(it => it.str);
         return {
             path: path.join("/"),
-            files: files1,
+            files: files1.sort(),
             weight: files1.length,
             isLeftovers: cluster.isLeftovers
         };
