@@ -52,17 +52,17 @@ export class AsyncGeneratorUtil {
     }
 }
 
-export interface AsyncIteratorWrapper<T> {
+export interface AsyncGeneratorWrapper<T> {
     get(): AsyncGenerator<T>
 
-    map<R>(mapper: (item: T) => R): AsyncIteratorWrapper<R>
+    map<R>(mapper: (item: T) => R): AsyncGeneratorWrapper<R>
 
-    flatMap<R>(mapper: (item: T) => AsyncGenerator<R>): AsyncIteratorWrapper<R>
+    flatMap<R>(mapper: (item: T) => AsyncGenerator<R>): AsyncGeneratorWrapper<R>
 
     forEach(consumer: (item: T) => void | Promise<void>): Promise<void>
 }
 
-export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
+class AsyncIteratorWrapperImpl<T> implements AsyncGeneratorWrapper<T> {
     private readonly source: AsyncGenerator<T>
 
     constructor(source: AsyncGenerator<T>) {
@@ -73,7 +73,7 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
         return this.source;
     }
 
-    map<R>(mapper: (item: T) => R): AsyncIteratorWrapper<R> {
+    map<R>(mapper: (item: T) => R): AsyncGeneratorWrapper<R> {
         return streamOf<R>((async function* <T, R>(source: AsyncIterable<T>, mapper: (item: T) => R): AsyncGenerator<R> {
             for await (const item of source) {
                 yield mapper(item);
@@ -81,7 +81,7 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
         })(this.source, mapper))
     }
 
-    flatMap<R>(mapper: (item: T) => AsyncGenerator<R>): AsyncIteratorWrapper<R> {
+    flatMap<R>(mapper: (item: T) => AsyncGenerator<R>): AsyncGeneratorWrapper<R> {
         return streamOf(AsyncGeneratorUtil.flatMap(this.source, mapper))
     }
 
@@ -92,12 +92,12 @@ export class AsyncIteratorWrapperImpl<T> implements AsyncIteratorWrapper<T> {
     }
 }
 
-export function streamOf<T>(source: AsyncGenerator<T>): AsyncIteratorWrapper<T> {
+export function streamOf<T>(source: AsyncGenerator<T>): AsyncGeneratorWrapper<T> {
     return new AsyncIteratorWrapperImpl<T>(source);
 }
 
 export namespace stream {
-    export function ofArrayPromise<T>(p: Promise<T[]>): AsyncIteratorWrapper<T> {
+    export function ofArrayPromise<T>(p: Promise<T[]>): AsyncGeneratorWrapper<T> {
         async function* __ofArrayPromise<T>(p: Promise<T[]>): AsyncGenerator<T> {
             const items = await p;
             for (const item of items) {
@@ -106,5 +106,7 @@ export namespace stream {
         }
         return streamOf(__ofArrayPromise(p))
     }
+
+
 
 }
