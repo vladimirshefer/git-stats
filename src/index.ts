@@ -96,7 +96,7 @@ async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: str
             item[2] = "0".repeat(40)
         }
         const lang = path.extname(repoRelativeFilePath) || 'Other';
-        let days_bucket = util.bucket(util.daysAgo(item[1] as number), [0, 30, 300, 1000, 1000000]);
+        let days_bucket = util.yyyyMM(item[1] as number);
         if (days_bucket != -1) {
             result.push([item[0], days_bucket, lang, repoRelativeFilePath, absoluteRepoRoot]);
         }
@@ -229,6 +229,13 @@ namespace util {
             if (n > buckets[i-1] && n < buckets[i]) return buckets[i - 1];
         }
         return -1;
+    }
+
+    export function yyyyMM(epoch: number): number {
+        const date = new Date(epoch * 1000);
+        let yyyyStr = date.getFullYear().toString();
+        let MMStr = (date.getMonth() + 1/4).toString().padStart(1, '0');
+        return parseInt(yyyyStr)*10 + parseInt(MMStr);
     }
 }
 

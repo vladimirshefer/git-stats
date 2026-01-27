@@ -32,12 +32,14 @@
 
     const RAW_DATASET =
         __DATASET_JSON__
-        || [];
+        || [[1,2,3,4,5,6,7,8,9]];
     // Fixed schema as per pipeline: [author, days_bucket, lang, clusterPath, repoName, count]
     const RAW_DATASET_SCHEMA = ["author", "days_bucket", "lang", "clusterPath", "repoName", "count"];
+    const CLUSTER_COLUMN = RAW_DATASET_SCHEMA.indexOf("clusterPath");
+    const REPO_COLUMN = RAW_DATASET_SCHEMA.indexOf("repoName");
     // -------- Client-side grouping/filtering engine --------
     const KEY_INDEX = Object.fromEntries(RAW_DATASET_SCHEMA.map((k, i) => [k, i]));
-    const COLUMNS_AMOUNT = RAW_DATASET_SCHEMA.length - 1;
+    const COLUMNS_AMOUNT = RAW_DATASET[0].length - 1;
     const COLUMNS_IDX_ARRAY = Array(COLUMNS_AMOUNT).fill(-1).map((_, i) => i);
     const COUNT_IDX_FROM_END = 1; // last element is count
     const COLUMN_COMPARATORS = COLUMNS_IDX_ARRAY.map(idx => {
@@ -214,14 +216,12 @@
 
         const PSEUDO_ROOT = "@";
         // Aggregate counts per path and propagate sums up the tree
-        const LEAF_IDX = KEY_INDEX['clusterPath'];
-        const COUNT_IDX = RAW_DATASET_SCHEMA.length - COUNT_IDX_FROM_END;
         const leafSums = new Map(); // fullPath -> sum
         const allPaths = new Set(); // includes all prefixes (no empty)
 
         for (const row of filtered) {
-            const rawPath = String(PSEUDO_ROOT + "/" + row[LEAF_IDX] ?? '').trim();
-            const cnt = Number(row[COUNT_IDX]) || 0;
+            const rawPath = String(row[REPO_COLUMN] + "/" + row[CLUSTER_COLUMN] ?? '').trim();
+            const cnt = Number(row[COLUMNS_AMOUNT]) || 0;
             if (!rawPath) continue;
             const segs = rawPath.split('/').filter(s => s && s !== '.');
             if (segs.length === 0) continue;

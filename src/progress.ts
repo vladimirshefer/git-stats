@@ -12,4 +12,10 @@ class Progress {
     getProgress() {
         return this.progress;
     }
+
+    showProgress(period: number) {
+        setInterval(() => {
+            console.log(`Progress: ${this.progress.toFixed(2)}%`);
+        }, period);
+    }
 }
