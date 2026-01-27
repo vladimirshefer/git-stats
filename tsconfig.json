@@ -10,8 +10,8 @@
     "types": ["vitest/globals"]
   },
   "include": [
-    "**/*.ts",
-    "**/*.html",
+    "src/**/*.ts",
+    "src/**/*.html",
   ],
   "exclude": ["node_modules"]
 }
