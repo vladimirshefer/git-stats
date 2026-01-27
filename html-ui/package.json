@@ -1,0 +1,21 @@
+{
+  "name": "gitstats-html-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:js": "esbuild src/main.tsx --bundle --minify --format=iife --target=es2018 --jsx=automatic --jsx-import-source=preact --outfile=dist/app.js --legal-comments=none",
+    "build:css": "npx @tailwindcss/cli -i src/tailwind.css -o dist/app.css --minify",
+    "build:html": "node scripts/build.mjs",
+    "build": "npm run build:js && npm run build:css && npm run build:html"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "@types/plotly.js-basic-dist-min": "^2.12.4",
+    "esbuild": "^0.20.2",
+    "tailwindcss": "^4.1.0"
+  },
+  "dependencies": {
+    "plotly.js-basic-dist-min": "^2.33.0",
+    "preact": "^10.22.0"
+  }
+}
