@@ -190,7 +190,7 @@ describe('test cluster files', () => {
         let g = buildGraph(files.map(it => ({arr: it.split("/"), str: it} as FileInfo)));
         graph.bubbleMicroLeftoversRecursive(g, 5, 2);
         let c = collect(g).map(it => [it.path.join("/"), it.value.map(it => it.str)]).filter(it => it[1].length > 0);
-        console.log(JSON.stringify(c, null, 2))
+        console.error(JSON.stringify(c, null, 2))
         expect(c).toStrictEqual([
             ["", [
                 "F0.java",

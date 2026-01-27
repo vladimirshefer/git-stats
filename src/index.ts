@@ -40,18 +40,18 @@ async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<DataRo
     const absoluteRepoPath = path.resolve(process.cwd(), repoRelativePath);
     const repoName = path.basename(absoluteRepoPath);
 
-    let revisionBoundary = await findRevision(absoluteRepoPath, 1000);
+    let revisionBoundary = await findRevision(absoluteRepoPath, 5000);
 
     const files = await git_ls_files(absoluteRepoPath, ".");
-    let minClusterSize = Math.floor(Math.max(5, files.length / 1000));
-    let maxClusterSize = Math.round(Math.max(20, minClusterSize * 2));
+    let minClusterSize = Math.floor(Math.max(2, files.length / 100));
+    let maxClusterSize = Math.round(Math.max(20, files.length / 30));
     console.error(`Clustering ${files.length} into ${minClusterSize}..${maxClusterSize}+ sized chunks`);
     const filesClustered = clusterFiles(
         files,
         maxClusterSize,
         minClusterSize
     );
-    console.error(filesClustered.map(it => `${it.path}${it.isLeftovers ? "/*" : ""} (${it.weight})`));
+    console.error(filesClustered.map(it => `${it.path} (${it.weight})`));
     let clusterPaths = filesClustered.map(it => it.path);
 
     console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
@@ -145,7 +145,6 @@ async function runScan(args: string[]) {
     let aggregatedData1 = runScan1(args);
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
-    // Keep current behavior: write aggregated data into .git-stats/data.jsonl
     aggregatedData.forEach(it => console.log(JSON.stringify(it)));
 }
 

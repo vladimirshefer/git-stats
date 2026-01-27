@@ -17,4 +17,4 @@ await esbuild.build({
 // Make the output file executable
 exec(`chmod +x dist/index.js`);
 
-console.log('Build finished successfully.');
+console.error('Build finished successfully.');

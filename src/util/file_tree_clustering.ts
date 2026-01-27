@@ -53,7 +53,6 @@ export namespace graph {
                 targetDir = targetDir.children[pathSegment];
             })
             targetDir.value.push(file);
-            console.log("push", targetDir.path, file.str, file.arr)
         })
         return result;
     }
@@ -74,19 +73,18 @@ export namespace graph {
         clusterMinSize: number
     ) {
         if (Object.keys(graphNode.children).length === 0) {
-            return
+            return false
         }
 
         if (graphNode.size <= clusterMaxSize) {
             let allFiles = flatten(graphNode);
-            return {
-                path: graphNode.path,
-                children: {},
-                value: allFiles,
-                size: graphNode.size,
-            }
+            graphNode.children = {}
+            graphNode.value = allFiles;
+            graphNode.size = allFiles.length;
+            return true
         }
 
+        let result = false;
         Object.entries(graphNode.children)
             .forEach(([k, child]) => {
                 if (child.value.length < clusterMinSize) {
@@ -96,21 +94,24 @@ export namespace graph {
                     child.value = []
                     if (child.size === 0) {
                         delete graphNode.children[k];
-                        console.log('delete', graphNode.path, k)
+                        console.error('delete', graphNode.path, k)
+                        result = true
                     }
                 }
             })
+
+        return result
     }
 
     function unpackSmallest(
         graphNode: GraphNode<FileInfo[]>,
         clusterMaxSize: number,
         clusterMinSize: number
-    ) {
+    ): boolean {
         let childrenSortedAsc = Object.entries(graphNode.children)
             .sort((a, b) => a[1].size - b[1].size);
         if (childrenSortedAsc.length === 0) {
-            return
+            return false
         }
         let [k, child] = childrenSortedAsc[0]
         let canFit = child.size + graphNode.value.length <= clusterMaxSize;
@@ -119,20 +120,23 @@ export namespace graph {
             graphNode.value.push(...flatten(child));
             graphNode.size++;
             delete graphNode.children[k];
-            console.log('delete', graphNode.path, k)
+            console.error('delete', graphNode.path, k)
+            return true
         }
+        return false
     }
 
     export function bubbleMicroLeftoversRecursive(
         graphNode: GraphNode<FileInfo[]>,
         clusterMaxSize: number,
         clusterMinSize: number
-    ) {
-        Object.values(graphNode.children).forEach(child => {
+    ): boolean {
+        let changed = Object.values(graphNode.children).map(child => {
             bubbleMicroLeftoversRecursive(child, clusterMaxSize, clusterMinSize)
-        });
-        unpackSmallest(graphNode, clusterMaxSize, clusterMinSize);
-        bubbleMicroLeftovers(graphNode, clusterMaxSize, clusterMinSize);
+        }).find(Boolean) || false;
+        changed = unpackSmallest(graphNode, clusterMaxSize, clusterMinSize) || changed;
+        changed = bubbleMicroLeftovers(graphNode, clusterMaxSize, clusterMinSize) || changed;
+        return changed;
     }
 
     export function collect<T>(
@@ -150,86 +154,6 @@ export namespace graph {
     }
 }
 
-function clusterFilesRecursively(
-    originalCluster: Cluster,
-    clusterMaxSize: number,
-    clusterMinSize: number
-): Cluster[] | null {
-    // no need to split, cluster is already small enough
-    if (originalCluster.files.length <= clusterMaxSize) {
-        return null;
-    }
-    // cannot split, give up
-    if (originalCluster.isUnclusterable) {
-        return null;
-    }
-
-    let l = originalCluster.path.length // next path segment index
-    let mf = mostFrequent(originalCluster.files.map(it => it.arr[l] || "$$$notfound$$$"))
-    let newClusterFiles: FileInfo[] = []
-    let remainingFiles = originalCluster.files.filter(it => {
-        let nextPathSegment = it.arr[l];
-        if (nextPathSegment === mf) {
-            newClusterFiles.push(it)
-            return false
-        } else {
-            return true
-        }
-    });
-    if (remainingFiles.length === 0) {
-        return [
-            {
-                path: originalCluster.path.concat([mf]),
-                files: newClusterFiles,
-                isLeftovers: false
-            } as Cluster
-        ];
-    }
-    if (newClusterFiles.length < clusterMinSize) {
-        return [{...originalCluster, isUnclusterable: true} as Cluster];
-    }
-    if (remainingFiles.length < clusterMinSize) {
-        // try extract some subcluster
-        let subclusters = clusterFilesRecursively({
-            path: originalCluster.path.concat([mf]),
-            files: newClusterFiles,
-            isLeftovers: false
-        } as Cluster, clusterMaxSize, 1);
-
-        // if clustering is impossible, give up and return original cluster as final
-        if (subclusters === null || subclusters.length === 1) {
-            return [{...originalCluster, isUnclusterable: true} as Cluster]
-        }
-
-        let sortedSubCandidatesDesc = subclusters
-            .sort((a, b) => b.files.length - a.files.length);
-
-        let okSub = []
-        let microSub = []
-        sortedSubCandidatesDesc.forEach(it => {
-            if (it.files.length <= clusterMinSize) {
-                microSub.push(it)
-            } else {
-                okSub.push(it)
-            }
-        })
-
-
-    }
-    return [
-        {
-            path: originalCluster.path.concat([mf]),
-            files: newClusterFiles,
-            isLeftovers: false
-        } as Cluster,
-        {
-            path: originalCluster.path,
-            files: remainingFiles,
-            isLeftovers: true
-        } as Cluster
-    ].sort((a, b) => b.files.length - a.files.length);
-}
-
 export function clusterFiles(
     files: string[],
     clusterMaxSize: number,
@@ -240,22 +164,19 @@ export function clusterFiles(
         let arr = it.split("/");
         return ({arr: arr, str: it}) as FileInfo;
     });
-    let initialCluster = {path: [], files: fileInfos, isLeftovers: false, isUnclusterable: false};
-    let clusterGroups: Cluster[] = [initialCluster];
-    let changes = true;
 
-    while (changes) {
-        changes = false;
-        clusterGroups = clusterGroups.flatMap((originalCluster) => {
-            let subclusters = clusterFilesRecursively(originalCluster, clusterMaxSize, clusterMinSize);
-            if (subclusters !== null) {
-                changes = true;
-                return subclusters
-            }
-            return originalCluster
-        })
-    }
-    return clusterGroups.map((cluster) => {
+    let graphNode = graph.buildGraph(fileInfos);
+    while (graph.bubbleMicroLeftoversRecursive(graphNode, clusterMaxSize, clusterMinSize)){}
+    let subclusters = graph.collect(graphNode)
+        .filter(it => it.value.length > 0)
+        .sort((a, b) => b.path.join("/").localeCompare(a.path.join("/")))
+        .map(it => ({
+            path: it.path,
+            files: it.value,
+            isLeftovers: it.size > clusterMinSize,
+            isUnclusterable: it.size <= clusterMinSize
+        }));
+    return subclusters.map((cluster) => {
         let files = cluster.files;
         let path = cluster.path;
         let files1 = files.map(it => it.str);

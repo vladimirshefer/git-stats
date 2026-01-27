@@ -13,7 +13,7 @@ export function execAsync(
     options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<{ stdout: string[]; stderr: string[] }> {
     return new Promise((resolve, reject) => {
-        const child = spawn(command, args, {...options, shell: true});
+        const child = spawn(command, args, {...options});
 
         let stdout: string[] = [];
         let stderr: string[] = [];
@@ -53,7 +53,7 @@ export function execAsync(
             if (code === 0) {
                 resolve({stdout: stdout, stderr: stderr});
             } else {
-                reject(new Error(`Command failed with code ${code}\n${stderr.join('\n')}`));
+                reject(new Error(`Command ${command} ${JSON.stringify(args)} failed with code ${code}\n${stderr.join('\n')}`));
             }
         });
     });

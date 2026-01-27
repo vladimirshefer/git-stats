@@ -208,49 +208,6 @@
         );
     }
 
-    function ChartView({labels, datasets}) {
-        const canvasRef = React.useRef(null);
-        const chartRef = React.useRef(null);
-        React.useEffect(() => {
-            const ctx = canvasRef.current.getContext('2d');
-            chartRef.current = new Chart(ctx, {
-                type: 'bar',
-                data: {labels: [], datasets: []},
-                options: {
-                    indexAxis: 'y',
-                    scales: {
-                        x: {stacked: true, beginAtZero: true},
-                        y: {stacked: true, ticks: {autoSkip: false}}
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function (context) {
-                                    let label = context.dataset.label || '';
-                                    if (label) label += ': ';
-                                    if (context.parsed.x !== null) label += context.parsed.x.toLocaleString();
-                                    return label;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            return () => {
-                chartRef.current && chartRef.current.destroy();
-            };
-        }, []);
-
-        React.useEffect(() => {
-            if (!chartRef.current) return;
-            chartRef.current.data.labels = labels;
-            chartRef.current.data.datasets = datasets;
-            chartRef.current.update();
-        }, [labels, datasets]);
-
-        return <canvas ref={canvasRef}/>;
-    }
-
     // ---------- Sunburst over repository paths (clusterPath) ----------
     function buildSunburst(dataset, filterState) {
         const filtered = dataset.filter(row => matchesFilters(row, filterState));
@@ -334,7 +291,7 @@
                 parents: data.parents,
                 values: data.values,
                 branchvalues: 'total',
-                maxdepth: 2
+                maxdepth: 3
             };
             const layout = {
                 margin: {l: 0, r: 0, t: 10, b: 10},
@@ -527,10 +484,6 @@
                             />
                         ))}
                     </div>
-                </div>
-                <div className="mt-5">
-                    <h2 id="chartTitle" className="border-b border-gray-300 pb-2.5">Chart</h2>
-                    <ChartView labels={chartLabels} datasets={datasets}/>
                 </div>
                 <div className="mt-8">
                     <h2 className="border-b border-gray-300 pb-2.5">Column Totals</h2>
