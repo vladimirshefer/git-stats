@@ -1,33 +1,13 @@
 import {h, render} from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import {useEffect, useMemo, useRef, useState} from "preact/hooks";
+import {COLUMNS_AMOUNT, COLUMNS_IDX_ARRAY, RAW_DATASET, RAW_DATASET_SCHEMA, UNIQUE_VALUES} from "./data";
 
 const Plotly = window.Plotly
-const RAW_DATASET: any[][] = (window as any)?.RAW_DATASET
-const RAW_DATASET_SCHEMA = ["author", "days_bucket", "lang", "clusterPath", "repoName", "count"];
-const CLUSTER_COLUMN = RAW_DATASET_SCHEMA.indexOf("clusterPath");
-const REPO_COLUMN = RAW_DATASET_SCHEMA.indexOf("repoName");
-const KEY_INDEX = Object.fromEntries(
+export const CLUSTER_COLUMN = RAW_DATASET_SCHEMA.indexOf("clusterPath");
+export const REPO_COLUMN = RAW_DATASET_SCHEMA.indexOf("repoName");
+export const KEY_INDEX = Object.fromEntries(
   RAW_DATASET_SCHEMA.map((k, i) => [k, i])
 );
-const COLUMNS_AMOUNT = RAW_DATASET[0].length - 1;
-const COLUMNS_IDX_ARRAY = Array(COLUMNS_AMOUNT)
-  .fill(-1)
-  .map((_, i) => i);
-const COUNT_IDX_FROM_END = 1; // last element is count
-const COLUMN_COMPARATORS = COLUMNS_IDX_ARRAY.map((idx) => {
-  const isNumber = typeof RAW_DATASET?.[0]?.[idx] === "number";
-  return isNumber
-    ? (a: number, b: number) => (a || 0) - (b || 0)
-    : (a: string, b: string) => String(a).localeCompare(String(b));
-});
-const UNIQUE_VALUES = COLUMNS_IDX_ARRAY.map((idx) =>
-  uniqueValues(RAW_DATASET, idx).sort(COLUMN_COMPARATORS[idx])
-);
-
-function uniqueValues(arr: unknown[][], idx: number) {
-  const set = new Set(arr.map((r) => r[idx]));
-  return Array.from(set);
-}
 
 function matchesFilters(row: unknown[], filters: Record<number, Set<string>>) {
   for (let idx = 0; idx < COLUMNS_AMOUNT; idx++) {
@@ -39,7 +19,12 @@ function matchesFilters(row: unknown[], filters: Record<number, Set<string>>) {
   return true;
 }
 
-function computeColumnTotals(dataset: unknown[][], columnIdx: number) {
+function computeColumnTotals(dataset: any[][], columnIdx: number): {
+  keys: any[];
+  values: any[];
+  totals: Map<any, any>;
+  contributions: Map<any, any>
+} {
   const value2total = new Map();
   const otherColumnContributions = new Map(); // Map<key, Map<otherColumnIdx, Map<otherValue, count>>>
 
