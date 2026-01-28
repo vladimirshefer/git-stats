@@ -2,19 +2,10 @@ import {h, render} from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 const Plotly = window.Plotly
-const RAW_DATASET = (window as any)?.RAW_DATASET
-// Fixed schema as per pipeline: [author, days_bucket, lang, clusterPath, repoName, count]
-const RAW_DATASET_SCHEMA = [
-  "author",
-  "days_bucket",
-  "lang",
-  "clusterPath",
-  "repoName",
-  "count"
-];
+const RAW_DATASET: any[][] = (window as any)?.RAW_DATASET
+const RAW_DATASET_SCHEMA = ["author", "days_bucket", "lang", "clusterPath", "repoName", "count"];
 const CLUSTER_COLUMN = RAW_DATASET_SCHEMA.indexOf("clusterPath");
 const REPO_COLUMN = RAW_DATASET_SCHEMA.indexOf("repoName");
-// -------- Client-side grouping/filtering engine --------
 const KEY_INDEX = Object.fromEntries(
   RAW_DATASET_SCHEMA.map((k, i) => [k, i])
 );
@@ -33,8 +24,6 @@ const UNIQUE_VALUES = COLUMNS_IDX_ARRAY.map((idx) =>
   uniqueValues(RAW_DATASET, idx).sort(COLUMN_COMPARATORS[idx])
 );
 
-const TOP_N = 20;
-
 function uniqueValues(arr: unknown[][], idx: number) {
   const set = new Set(arr.map((r) => r[idx]));
   return Array.from(set);
@@ -48,32 +37,6 @@ function matchesFilters(row: unknown[], filters: Record<number, Set<string>>) {
     }
   }
   return true;
-}
-
-function pivot(dataset: unknown[][], column1: number, column2: number) {
-  const grouped2 = new Map();
-  const secValuesSet = new Set();
-  for (const row of dataset) {
-    const c1 = row[column1];
-    const c2 = row[column2];
-    const count = Number(row[row.length - COUNT_IDX_FROM_END]) || 0;
-    if (!grouped2.has(c1)) grouped2.set(c1, new Map());
-    grouped2.get(c1).set(c2, (grouped2.get(c1).get(c2) || 0) + count);
-    secValuesSet.add(c2);
-  }
-  const primaryTotals = new Map();
-  for (const [c1, innerMap] of grouped2) {
-    let total = 0;
-    for (const val of innerMap.values()) total += val;
-    primaryTotals.set(c1, total);
-  }
-  const primaryKeys = Array.from(grouped2.keys()).sort(
-    (a, b) => (primaryTotals.get(b) || 0) - (primaryTotals.get(a) || 0)
-  );
-  const secondaryKeys = Array.from(secValuesSet).sort((a, b) =>
-    String(a).localeCompare(String(b))
-  );
-  return { grouped2, primaryKeys, secondaryKeys };
 }
 
 function computeColumnTotals(dataset: unknown[][], columnIdx: number) {
@@ -219,12 +182,15 @@ function ColumnTotalCard({
 }
 
 // ---------- Sunburst over repository paths (clusterPath) ----------
-function buildSunburst(dataset: any[][], filterState: Record<number, Set<string>>) {
-  const filtered = dataset.filter((row) => matchesFilters(row, filterState));
+function buildSunburst(dataset: any[][]): {
+  ids: string[];
+  labels: string[];
+  parents: string[];
+  values: number[]
+} {
+  const filtered: any[][] = dataset;
 
-  const PSEUDO_ROOT = "@";
-  // Aggregate counts per path and propagate sums up the tree
-  const leafSums = new Map(); // fullPath -> sum
+  const leafSums = new Map<string, number>(); // fullPath -> sum
   const allPaths = new Set<string>(); // includes all prefixes (no empty)
 
   for (const row of filtered) {
@@ -283,14 +249,12 @@ function buildSunburst(dataset: any[][], filterState: Record<number, Set<string>
 }
 
 function SunburstPaths({
-  dataset,
-  filters
+  dataset
 }: {
-  dataset: unknown[][];
-  filters: Record<number, Set<string>>;
+  dataset: any[][];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const data = useMemo(() => buildSunburst(dataset, filters), [dataset, filters]);
+  const data = useMemo(() => buildSunburst(dataset), [dataset]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -466,11 +430,6 @@ function App() {
   const [primaryKeyIndex, setPrimaryKeyIndex] = useState(0);
   const [secondaryKeyIndex, setSecondaryKeyIndex] = useState(1);
 
-  useMemo(() => {
-    const filteredDataset = RAW_DATASET.filter((row) => matchesFilters(row, filters));
-    return pivot(filteredDataset, primaryKeyIndex, secondaryKeyIndex);
-  }, [filters, primaryKeyIndex, secondaryKeyIndex]);
-
   return (
     <div className="max-w-4xl mx-auto my-5 p-5 bg-white rounded-lg shadow-sm">
       <h1 className="border-b border-gray-300 pb-2.5">Git Contribution Statistics</h1>
@@ -547,7 +506,7 @@ function App() {
         <p className="text-sm text-gray-600 mt-2 mb-3">
           Breakdown by folder structure based on <code>clusterPath</code> within current filters.
         </p>
-        <SunburstPaths dataset={RAW_DATASET} filters={filters} />
+        <SunburstPaths dataset={RAW_DATASET.filter(it => matchesFilters(it, filters))} />
       </div>
     </div>
   );
