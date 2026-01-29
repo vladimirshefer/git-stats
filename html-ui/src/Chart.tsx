@@ -1,6 +1,5 @@
 import {useEffect, useRef} from "preact/hooks";
 import {h} from "preact";
-import Plotly from "plotly.js";
 
 export default function Chart(
     {

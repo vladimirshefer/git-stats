@@ -2,6 +2,7 @@ import {h, render} from "preact";
 import {useEffect, useMemo, useRef, useState} from "preact/hooks";
 import {COLUMNS_AMOUNT, COLUMNS_IDX_ARRAY, RAW_DATASET, RAW_DATASET_SCHEMA, UNIQUE_VALUES} from "./data";
 import {MultiSelect} from "./MultiSelect";
+import Chart from "./Chart";
 
 const Plotly = window.Plotly
 export const CLUSTER_COLUMN = RAW_DATASET_SCHEMA.indexOf("clusterPath");
@@ -288,9 +289,32 @@ function App() {
     return { initialFilters: filters, valueOptions: options };
   }, []);
   const [filters, setFilters] = useState(initialFilters);
+  const filteredDataset = useMemo(() => RAW_DATASET.filter(it => matchesFilters(it, filters)), [filters]);
+  const datesData = useMemo(() => {
+    const d = new Map<number, number>();
+    let dateIndex = RAW_DATASET_SCHEMA.indexOf("days_bucket");
+    let min = null;
+    let max = null;
+    filteredDataset.forEach(row => {
+      const date = row[dateIndex];
+      const count = Number(row[COLUMNS_AMOUNT]) || 0;
+      d.set(date, (d.get(date) || 0) + count);
+      console.error("ADD", date)
+      if (!min || date < min) min = date;
+      if (!max || date > max) max = date;
+    });
+    for (let i = min; i < max; i++) {
+      if (i % 10 > 0 && i % 10 <= 4 && !d.has(i)) {
+        d.set(i, 0);
+        console.error("ADD", i)
+      }
+    }
+    return Array.from(d.entries()).sort((a, b) => a[0] - b[0]);
+  }, [filteredDataset])
+  console.error("DATES", datesData)
 
   return (
-    <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-sm">
+      <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-sm p-4">
       <h1 className="border-gray-300 text-xl">Git Contribution Statistics</h1>
       <div
         id="filters"
@@ -306,8 +330,43 @@ function App() {
           />
         ))}
       </div>
-      <div className="mt-8">
-        <h2 className="border-b border-gray-300 pb-2.5">Column Totals</h2>
+        <div>
+          <Chart
+              data={[
+                {
+                  x: datesData.map(it => it[0]+"_"),
+                  y: datesData.map(it => it[1]),
+                  type: 'scatter',
+                }
+              ]}
+              layout={{
+                xaxis: {
+                  visible: false,
+                },
+                yaxis: {
+                  visible: false
+                },
+                height: 150,
+                margin: {
+                  l: 0,
+                  r: 0,
+                  t: 0,
+                  b: 0,
+                  pad: 0
+                },
+                line: {
+                  shape: 'spline',
+                  smoothing: 1.3   // 0–1.3 (higher = smoother)
+                }
+              }}
+              config={{
+                displayModeBar: false,
+                displaylogo: false,
+              }}
+          />
+        </div>
+        <div>
+          <h2 className="border-b border-gray-300">Column Totals</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           {COLUMNS_IDX_ARRAY.map((__, idx) => {
             const filteredDataset = RAW_DATASET.filter((row) => matchesFilters(row, filters));
@@ -334,7 +393,7 @@ function App() {
         <p className="text-sm text-gray-600 mt-2 mb-3">
           Breakdown by folder structure based on <code>clusterPath</code> within current filters.
         </p>
-        <SunburstPaths dataset={RAW_DATASET.filter(it => matchesFilters(it, filters))} />
+        <SunburstPaths dataset={filteredDataset}/>
       </div>
     </div>
   );
