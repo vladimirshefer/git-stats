@@ -15,10 +15,9 @@
     "access": "public"
   },
   "scripts": {
-    "build": "npm --prefix ../html-ui run build && node build.mjs",
+    "build": "node build.mjs",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "postinstall": "npm --prefix ../html-ui install"
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

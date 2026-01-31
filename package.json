@@ -1,0 +1,18 @@
+{
+  "name": "gitstats-monorepo",
+  "private": true,
+  "workspaces": [
+    "html-ui",
+    "cli"
+  ],
+  "scripts": {
+    "build": "npm run build -ws",
+    "build:order": "npm run build -w html-ui && npm run build -w @vladimirshefer/git-stats",
+    "test": "npm test -ws",
+    "clean": "rimraf cli/node_modules cli/dist html-ui/node_modules html-ui/dist",
+    "ci": "npm ci --workspaces"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.0"
+  }
+}

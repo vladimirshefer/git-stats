@@ -1,19 +1,14 @@
 rebuild: clear
-	npm --prefix html-ui install
-	npm --prefix cli install
-	npm --prefix html-ui run build
-	npm --prefix cli run build
+	npm install
+	npm run build
 	npm --prefix cli install -g
 
 build:
-	npm --prefix html-ui ci
-	npm --prefix cli ci
-	npm --prefix html-ui run build
-	npm --prefix cli run build
+	npm ci --workspaces
+	npm run build
 
 test:
-	npm --prefix html-ui run test
-	npm --prefix cli run test
+	npm test --workspaces
 
 clear:
 	rm -rf ./cli/node_modules
