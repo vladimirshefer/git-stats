@@ -1,4 +1,5 @@
 import {parsePorcelain} from "../src/git";
+import {describe, expect, it} from "vitest";
 
 describe('test git blame porcelain', () => {
     it('base scenario', () => {
