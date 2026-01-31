@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import {execAsync} from "./util/exec";
-import {DataRow} from "./base/types";
+import {Dto} from "./base/types";
 
 /**
  * Executes git blame --line-porcelain for a file and returns the raw output as a string.
@@ -84,24 +84,32 @@ export async function executeGitBlamePorcelain(
  *
  * @param file - relative path to the file within the repository
  * @param repoRoot - absolute path to the repository root
- * @param fields
+ * @param fields - firlds like
+ * @param revisionBoundary - commit hash
  */
 export async function git_blame_porcelain(
     file: string,
     repoRoot: string,
     fields: string[],
     revisionBoundary?: string
-): Promise<DataRow[]> {
+): Promise<Partial<LineInfo>[]> {
     const blameOutput = await executeGitBlamePorcelain(file, repoRoot, revisionBoundary);
     return parsePorcelain(blameOutput, fields);
 }
 
-export function parsePorcelain(blameOutput: string[], fields: string[]): DataRow[] {
+export type LineInfo = {
+    commit: string;
+    author: string;
+    time: number;
+    boundary: 1 | undefined;
+}
+
+export function parsePorcelain(blameOutput: string[], fields: string[]): Partial<LineInfo>[] {
     const userPos = fields.indexOf("author");
     const commiterTimePos = fields.indexOf("committer-time");
     const boundaryPos = fields.indexOf("boundary");
     const commitPos = fields.indexOf("commit");
-    let emptyRow: DataRow = [...fields];
+    let emptyRow: Dto = {};
     if (commiterTimePos >= 0) {
         emptyRow[commiterTimePos] = 0
     }
@@ -109,12 +117,12 @@ export function parsePorcelain(blameOutput: string[], fields: string[]): DataRow
         emptyRow[boundaryPos] = 0
     }
     // Working row that carries current hunk's metadata (author, commit, etc.)
-    let nextRow: DataRow = [...emptyRow]
-    const result: DataRow[] = [];
+    let nextRow: Dto = {...emptyRow}
+    const result: Dto[] = [];
     for (const line of blameOutput) {
         if (line.startsWith('\t')) {
             // Push a snapshot of the current state (do not reset; same hunk may span multiple lines)
-            result.push([...nextRow]);
+            result.push({...nextRow});
             continue;
         }
         // Hunk header starts with commit hash, e.g.:
@@ -126,22 +134,22 @@ export function parsePorcelain(blameOutput: string[], fields: string[]): DataRow
                 // Accept 40-hex (optionally prefixed with ^ for boundary/root markers)
                 if (/^\^?[0-9a-f]{40}$/i.test(possibleHash)) {
                     // Start a new hunk context
-                    nextRow = [...emptyRow]
+                    nextRow = {...emptyRow}
                     nextRow[commitPos] = possibleHash.replace(/^\^/, '');
                     continue;
                 }
             }
         }
         if (userPos >= 0 && line.startsWith('author ')) {
-            nextRow[userPos] = line.substring('author '.length).replace(/^<|>$/g, '');
+            nextRow.author = line.substring('author '.length).replace(/^<|>$/g, '');
             continue;
         }
         if (commiterTimePos >= 0 && line.startsWith('committer-time ')) {
-            nextRow[commiterTimePos] = parseInt(line.substring('committer-time '.length), 10);
+            nextRow.time = parseInt(line.substring('committer-time '.length), 10);
             continue;
         }
         if (boundaryPos >= 0 && line.startsWith("boundary")) {
-            nextRow[boundaryPos] = 1
+            nextRow.boundary = 1
         }
     }
 

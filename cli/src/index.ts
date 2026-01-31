@@ -13,28 +13,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {generateHtmlReport} from './output/report_template';
-import {findRevision, git_blame_porcelain, git_ls_files, isGitRepo} from "./git";
+import {findRevision, git_blame_porcelain, git_ls_files} from "./git";
 import {AsyncGeneratorUtil, stream, streamOf} from "./util/AsyncGeneratorUtil";
 import {clusterFiles} from "./util/file_tree_clustering";
-import {DataRow} from "./base/types";
+import {DataRow, Dto} from "./base/types";
 import {distinctCount} from "./util/dataset";
+import {getRepoPathsToProcess} from "./discovery";
+import {Progress} from "./progress";
 
 let sigintCaught = false;
+const progress = new Progress();
+progress.showProgress(300);
 
-function getDirectories(absoluteDirPath: string): string[] {
-    if (!fs.existsSync(absoluteDirPath) || !fs.statSync(absoluteDirPath).isDirectory()) return [];
-    const ignoredDirs = new Set(['.git', 'node_modules']);
-    try {
-        return fs.readdirSync(absoluteDirPath, {withFileTypes: true})
-            .filter(dirent => dirent.isDirectory() && !ignoredDirs.has(dirent.name))
-            .map(dirent => path.join(absoluteDirPath, dirent.name));
-    } catch (error) {
-        console.error(`Could not read directory: ${absoluteDirPath}`);
-        return [];
-    }
-}
-
-async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<DataRow> {
+async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<Dto> {
     console.error(`\nProcessing repository: ${repoRelativePath || '.'}`);
 
     const absoluteRepoPath = path.resolve(process.cwd(), repoRelativePath);
@@ -61,12 +52,17 @@ async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<DataRo
     for (let i = 0; i < files.length; i++) {
         if (sigintCaught) break;
         const file = filesShuffled[i];
-        const progressMessage = `[${i + 1}/${files.length}] Analyzing: ${file}`;
-        process.stderr.write(progressMessage.padEnd(process.stderr.columns || 80, ' ') + '\r');
+        progress.setProgress("File", i+1, files.length)
+        progress.setMessage("File", file)
 
         try {
             let clusterPath = clusterPaths.find(it => file.startsWith(it)) ?? "$$$unknown$$$";
-            yield [absoluteRepoPath, file, revisionBoundary, clusterPath] as DataRow;
+            yield {
+                repo: absoluteRepoPath,
+                file: file,
+                rev: revisionBoundary,
+                cluster: clusterPath
+            }
         } catch (e: any) {
             if (e.signal === 'SIGINT') sigintCaught = true;
             // Silently skip files that error
@@ -77,7 +73,7 @@ async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<DataRo
     console.error(`Analysis complete for '${repoName}'.`);
 }
 
-async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: string, revisionBoundary?: string): Promise<DataRow[]> {
+async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: string, revisionBoundary?: string): Promise<Dto[]> {
     if (!repoRelativeFilePath) return [];
     const absoluteFilePath = path.join(absoluteRepoRoot, repoRelativeFilePath);
     let stat: fs.Stats | null = null;
@@ -88,46 +84,45 @@ async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: str
     }
     if (!stat || !stat.isFile() || stat.size === 0) return [];
 
-    const result: DataRow[] = []
+    const result: Dto[] = []
     for (const item of await git_blame_porcelain(repoRelativeFilePath, absoluteRepoRoot, ["author", "committer-time", "commit"], (!!revisionBoundary ? revisionBoundary + "..HEAD" : undefined))) {
-        if (revisionBoundary === item[2]) {
-            item[0] = "?"
-            item[1] = 0
-            item[2] = "0".repeat(40)
+        if (revisionBoundary === item.commit) {
+            item.author = "Legacy"
+            item.time = 0
+            item.commit = "0".repeat(40)
         }
-        const lang = path.extname(repoRelativeFilePath) || 'Other';
-        let days_bucket = util.yyyyMM(item[1] as number);
-        if (days_bucket != -1) {
-            result.push([item[0], days_bucket, lang, repoRelativeFilePath, absoluteRepoRoot]);
-        }
+        result.push({
+            repo: absoluteRepoRoot,
+            file: repoRelativeFilePath,
+            author: item.author,
+            commit: item.commit,
+            year: new Date(item.time! * 1000).getFullYear(),
+            month: new Date(item.time! * 1000).getMonth() + 1,
+            lang: path.extname(repoRelativeFilePath) || 'Other',
+        });
     }
     return result;
 }
 
-function getRepoPathsToProcess(inputPaths: string[]): string[] {
-    let repoPathsToProcess: string[] = inputPaths.flatMap(it => findRepositories(it, 3));
-    repoPathsToProcess = util.distinct(repoPathsToProcess).sort();
-    if (repoPathsToProcess.length === 0) {
-        throw new Error("No git repositories found to analyze.");
-    }
-
-    console.error(`Found ${repoPathsToProcess.length} repositories to analyze:`);
-    repoPathsToProcess.forEach(p => console.error(`- ${p ?? '.'}`));
-    return repoPathsToProcess;
-}
-
-function runScan1(args: string[]): AsyncGenerator<DataRow> {
+function runScan1(args: string[]): AsyncGenerator<[any, number]> {
     const inputPaths = (args && args.length > 0) ? args : ['.'];
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
     let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
         .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath))
         .flatMap(fileInfo => {
-            let linesInfo = stream.ofArrayPromise(doProcessFile(fileInfo[0] as string, fileInfo[1] as string, fileInfo[2] as string));
-            return linesInfo.map(it => it.concat(fileInfo[3]) as DataRow).get();
+            return stream.ofArrayPromise(doProcessFile(fileInfo.repo, fileInfo.file, fileInfo.rev)).get();
         })
-        .map(it => [it[0], it[1], it[2], it[5], path.basename(it[4] as string)])
+        .map(it => {
+            return {
+                ...it,
+                filename: path.basename(it.file)
+            } as Dto
+        })
+        .map(it => [it.author, it.time, it.lang, it.cluster, it.repo])
         .get();
+
+    progress.stop("File")
 
     return distinctCount(dataSet);
 }
@@ -146,6 +141,7 @@ async function runScan(args: string[]) {
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
     aggregatedData.forEach(it => console.log(JSON.stringify(it)));
+
 }
 
 async function runHtml(args: string[]) {
@@ -169,15 +165,6 @@ async function runHtml(args: string[]) {
 
     generateHtmlReport(aggregatedData, absoluteOutHtml);
     console.error(`HTML report generated: ${absoluteOutHtml}`);
-}
-
-function findRepositories(absolutePath: string, depth: number): string[] {
-    if (depth <= 0) return [];
-    if (!fs.existsSync(absolutePath)) throw new Error(`Path does not exist: ${absolutePath}`);
-    if (!fs.statSync(absolutePath).isDirectory()) return [];
-    if (isGitRepo(absolutePath)) return [absolutePath];
-    let result = getDirectories(absolutePath).flatMap(dir => findRepositories(dir, depth - 1));
-    return util.distinct(result).sort();
 }
 
 // --- Main Application Controller ---
@@ -209,33 +196,6 @@ async function main() {
     console.error(`Usage: git-stats <subcommand> [args]\n\nAvailable subcommands:`);
     for (const [name, {description, usage}] of Object.entries(subcommandsMenu)) {
         console.error(`- ${name}: ${description}\n    Usage: ${usage}`);
-    }
-}
-
-// --- Utility Functions ---
-namespace util {
-    export function distinct<T>(arr: T[]): T[] {
-        return [...new Set(arr)];
-    }
-
-    export function daysAgo(epoch: number): number {
-        const now = Date.now();
-        const diff = now - (epoch * 1000);
-        return Math.floor(diff / (1000 * 60 * 60 * 24));
-    }
-
-    export function bucket(n: number, buckets: number[]): number {
-        for (let i = 1; i < buckets.length; i++) {
-            if (n > buckets[i-1] && n < buckets[i]) return buckets[i - 1];
-        }
-        return -1;
-    }
-
-    export function yyyyMM(epoch: number): number {
-        const date = new Date(epoch * 1000);
-        let yyyyStr = date.getFullYear().toString();
-        let MMStr = (date.getMonth() + 1/4).toString().padStart(1, '0');
-        return parseInt(yyyyStr)*10 + parseInt(MMStr);
     }
 }
 
