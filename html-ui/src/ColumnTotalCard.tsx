@@ -1,6 +1,7 @@
-import {useEffect, useMemo, useRef} from "preact/hooks";
+import {useMemo} from "preact/hooks";
 import {COLUMNS_AMOUNT, RAW_DATASET_SCHEMA} from "./data";
 import {h} from "preact";
+import Chart from "./Chart";
 
 export function ColumnTotalCard(
     {
@@ -22,8 +23,6 @@ export function ColumnTotalCard(
         >;
     }
 ) {
-    const containerRef = useRef<HTMLDivElement | null>(null);
-
     const {labels, hoverText} = useMemo(() => {
         const labels: string[] = [];
         const hoverText: string[] = [];
@@ -63,15 +62,8 @@ export function ColumnTotalCard(
         return {labels, hoverText};
     }, [columnName, columnIdx, keys, totals, contributions]);
 
-    useEffect(() => {
-        const el = containerRef.current;
-        if (!el) return;
-        if (!labels.length) {
-            el.innerHTML =
-                '<div class="text-gray-500 py-6 text-center">No data to display</div>';
-            return;
-        }
-        const trace = {
+    const data = useMemo(() => {
+        return [{
             type: "sunburst",
             labels: labels,
             parents: labels.map(() => ""),
@@ -79,8 +71,11 @@ export function ColumnTotalCard(
             hovertext: hoverText,
             hovertemplate: "%{hovertext}<extra></extra>",
             branchvalues: "total"
-        };
-        const layout = {
+        }];
+    }, [labels, hoverText, values]);
+
+    const layout = useMemo(() => {
+        return {
             margin: {l: 0, r: 0, t: 10, b: 10},
             sunburstcolorway: [
                 "#4F46E5",
@@ -94,16 +89,22 @@ export function ColumnTotalCard(
             extendsunburstcolors: true,
             height: 300
         };
-        const config = {responsive: true, displayModeBar: false};
-        Plotly.newPlot(el, [trace], layout, config);
-    }, [labels, hoverText, values]);
+    }, []);
+
+    const config = useMemo(() => {
+        return {responsive: true, displayModeBar: false};
+    }, []);
 
     return (
         <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
             <h3 className="text-lg font-semibold mb-3 text-gray-800">
                 {columnName} - Total
             </h3>
-            <div ref={containerRef} className="w-full"/>
+            {!labels.length ? (
+                <div className="text-gray-500 py-6 text-center">No data to display</div>
+            ) : (
+                <Chart data={data} layout={layout} config={config}/>
+            )}
         </div>
     );
 }
