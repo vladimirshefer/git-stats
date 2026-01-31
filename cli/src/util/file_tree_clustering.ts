@@ -1,6 +1,3 @@
-import value from "*.html";
-import path from "path";
-
 export type FileTreeCluster = {
     path: string,
     files: string[],
@@ -181,9 +178,3 @@ export type FileInfo = {
     str: string
 }
 
-type Cluster = {
-    path: string[],
-    files: FileInfo[],
-    isLeftovers: boolean,
-    isUnclusterable: boolean
-};
