@@ -22,8 +22,7 @@ import {getRepoPathsToProcess} from "./discovery";
 import {Progress} from "./progress";
 
 let sigintCaught = false;
-const progress = new Progress();
-progress.showProgress(300);
+let progress: Progress | null = null;
 
 async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto> {
     console.error(`\nProcessing repository: ${repoRelativePath || '.'}`);
@@ -31,41 +30,44 @@ async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto
     const absoluteRepoPath = path.resolve(process.cwd(), repoRelativePath);
     const repoName = path.basename(absoluteRepoPath);
 
-    let revisionBoundary = await findRevision(absoluteRepoPath, 5000);
+    let revisionBoundary = await findRevision(absoluteRepoPath, 1000);
 
     const files = await git_ls_files(absoluteRepoPath, ".");
     let minClusterSize = Math.floor(Math.max(2, files.length / 100));
     let maxClusterSize = Math.round(Math.max(20, files.length / 30));
+    console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
     console.error(`Clustering ${files.length} into ${minClusterSize}..${maxClusterSize}+ sized chunks`);
+
     const filesClustered = clusterFiles(
         files,
         maxClusterSize,
         minClusterSize
     );
     console.error(filesClustered.map(it => `${it.path} (${it.weight})`));
-    let clusterPaths = filesClustered.map(it => it.path);
 
-    console.error(`Found ${files.length} files to analyze in '${repoName}'...`);
-
-    let filesShuffled = [...files].sort(() => Math.random() - 0.5);
-
-    for (let i = 0; i < files.length; i++) {
-        if (sigintCaught) break;
-        const file = filesShuffled[i];
-        progress.setProgress("File", i+1, files.length)
-        progress.setMessage("File", file)
-
-        try {
-            let clusterPath = clusterPaths.find(it => file.startsWith(it)) ?? "$$$unknown$$$";
-            yield {
-                repo: absoluteRepoPath,
+    let filesShuffled = filesClustered
+        .flatMap(cluster => cluster.files
+            .flatMap(file => ({
                 file: file,
-                rev: revisionBoundary,
-                cluster: clusterPath
-            }
-        } catch (e: any) {
-            if (e.signal === 'SIGINT') sigintCaught = true;
-            // Silently skip files that error
+                cluster: cluster.path
+            }))
+        );
+    for (let i = filesShuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [filesShuffled[i], filesShuffled[j]] = [filesShuffled[j], filesShuffled[i]];
+    }
+
+    for (let i = 0; i < filesShuffled.length; i++) {
+        if (sigintCaught) break;
+        const currentFile = filesShuffled[i];
+        progress?.setProgress("File", i + 1, files.length)
+        progress?.setMessage("File", currentFile.file)
+
+        yield {
+            repo: absoluteRepoPath,
+            file: currentFile.file,
+            rev: revisionBoundary,
+            cluster: currentFile.cluster
         }
     }
 
@@ -93,9 +95,10 @@ async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: str
         }
         result.push({
             repo: absoluteRepoRoot,
-            file: repoRelativeFilePath,
+            file: path.basename(repoRelativeFilePath),
             author: item.author,
             commit: item.commit,
+            time: item.time,
             year: new Date(item.time! * 1000).getFullYear(),
             month: new Date(item.time! * 1000).getMonth() + 1,
             lang: path.extname(repoRelativeFilePath) || 'Other',
@@ -110,15 +113,7 @@ function runScan1(args: string[]): AsyncGenerator<[any, number]> {
 
     let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
         .flatMap(repoRelativePath => getRepositoryFiles(repoRelativePath))
-        .flatMap(fileInfo => {
-            return stream.ofArrayPromise(doProcessFile(fileInfo.repo, fileInfo.file, fileInfo.rev)).get();
-        })
-        .map(it => {
-            return {
-                ...it,
-                filename: path.basename(it.file)
-            } as Dto
-        })
+        .flatMap(fileInfo => stream.ofArrayPromise(doProcessFile(fileInfo.repo, fileInfo.file, fileInfo.rev)).get())
         .map(it => [it.author, it.time, it.lang, it.cluster, it.repo])
         .get();
 
@@ -126,6 +121,9 @@ function runScan1(args: string[]): AsyncGenerator<[any, number]> {
 }
 
 async function runScan(args: string[]) {
+    progress = new Progress();
+    progress.showProgress(300);
+
     process.on('SIGINT', () => {
         if (sigintCaught) {
             console.error("\nForcing exit.");
@@ -138,7 +136,7 @@ async function runScan(args: string[]) {
     let aggregatedData1 = runScan1(args);
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
-    progress.destroy()
+    progress?.destroy()
     aggregatedData.forEach(it => console.log(JSON.stringify(it)));
 }
 

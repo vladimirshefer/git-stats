@@ -60,6 +60,8 @@ export interface AsyncGeneratorWrapper<T> {
     flatMap<R>(mapper: (item: T) => AsyncGenerator<R>): AsyncGeneratorWrapper<R>
 
     forEach(consumer: (item: T) => void | Promise<void>): Promise<void>
+
+    chunked(size: number): AsyncGeneratorWrapper<T[]>
 }
 
 class AsyncIteratorWrapperImpl<T> implements AsyncGeneratorWrapper<T> {
@@ -67,6 +69,24 @@ class AsyncIteratorWrapperImpl<T> implements AsyncGeneratorWrapper<T> {
 
     constructor(source: AsyncGenerator<T>) {
         this.source = source;
+    }
+
+    chunked(size: number): AsyncGeneratorWrapper<T[]> {
+        return streamOf(this.__chunked(size))
+    }
+
+    async * __chunked(size: number): AsyncGenerator<T[]> {
+        let chunk: T[] = [];
+        for await (const item of this.source) {
+            chunk.push(item);
+            if (chunk.length === size) {
+                yield chunk;
+                chunk = [];
+            }
+        }
+        if (chunk.length > 0) {
+            yield chunk;
+        }
     }
 
     get(): AsyncGenerator<T> {
