@@ -175,4 +175,3 @@ export type FileInfo = {
     arr: string[],
     str: string
 }
-

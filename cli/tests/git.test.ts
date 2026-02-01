@@ -29,11 +29,10 @@ summary Update farewell line
 filename example.txt
 \tGoodbye world
         `.trim()
-        let parsePorcelain1 = parsePorcelain(output.split("\n"), ["author", "committer-time"]);
-        expect(parsePorcelain1).toStrictEqual([
-            ["Alice Doe", 1700000000],
-            ["Bob Smith", 1700100000]
-        ])
+        const rows = parsePorcelain(output.split("\n"), ["author", "committer-time"]);
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toMatchObject({author: "Alice Doe", time: 1700000000});
+        expect(rows[1]).toMatchObject({author: "Bob Smith", time: 1700100000});
     });
 
     it('captures commit hash when requested', () => {
@@ -52,10 +51,24 @@ filename example.txt
         `.trim();
 
         const rows = parsePorcelain(output.split('\n'), ["commit", "author", "committer-time"]);
-        expect(rows).toStrictEqual([
-            ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Alice Doe", 1700000000],
-            ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Alice Doe", 1700000000],
-            ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Bob Smith", 1700100000],
-        ]);
+        expect(rows).toHaveLength(3);
+        expect(rows[0]).toMatchObject({commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", author: "Alice Doe", time: 1700000000});
+        expect(rows[1]).toMatchObject({commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", author: "Alice Doe", time: 1700000000});
+        expect(rows[2]).toMatchObject({commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", author: "Bob Smith", time: 1700100000});
+    });
+
+    it('marks boundary when present', () => {
+        const output = `
+^aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1 1 1
+author Alice Doe
+committer-time 1700000000
+boundary
+filename example.txt
+\tRoot line
+        `.trim();
+
+        const rows = parsePorcelain(output.split('\n'), ["author", "committer-time", "boundary"]);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({author: "Alice Doe", time: 1700000000, boundary: 1});
     });
 });

@@ -25,7 +25,7 @@ let sigintCaught = false;
 const progress = new Progress();
 progress.showProgress(300);
 
-async function* forEachRepoFile(repoRelativePath: string): AsyncGenerator<Dto> {
+async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto> {
     console.error(`\nProcessing repository: ${repoRelativePath || '.'}`);
 
     const absoluteRepoPath = path.resolve(process.cwd(), repoRelativePath);
@@ -109,7 +109,7 @@ function runScan1(args: string[]): AsyncGenerator<[any, number]> {
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
     let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
-        .flatMap(repoRelativePath => forEachRepoFile(repoRelativePath))
+        .flatMap(repoRelativePath => getRepositoryFiles(repoRelativePath))
         .flatMap(fileInfo => {
             return stream.ofArrayPromise(doProcessFile(fileInfo.repo, fileInfo.file, fileInfo.rev)).get();
         })

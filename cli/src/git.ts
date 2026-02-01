@@ -135,7 +135,7 @@ export function parsePorcelain(blameOutput: string[], fields: string[]): Partial
                 if (/^\^?[0-9a-f]{40}$/i.test(possibleHash)) {
                     // Start a new hunk context
                     nextRow = {...emptyRow}
-                    nextRow[commitPos] = possibleHash.replace(/^\^/, '');
+                    nextRow.commit = possibleHash.replace(/^\^/, '');
                     continue;
                 }
             }
