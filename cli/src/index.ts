@@ -122,8 +122,6 @@ function runScan1(args: string[]): AsyncGenerator<[any, number]> {
         .map(it => [it.author, it.time, it.lang, it.cluster, it.repo])
         .get();
 
-    progress.stop("File")
-
     return distinctCount(dataSet);
 }
 
@@ -140,8 +138,8 @@ async function runScan(args: string[]) {
     let aggregatedData1 = runScan1(args);
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
+    progress.destroy()
     aggregatedData.forEach(it => console.log(JSON.stringify(it)));
-
 }
 
 async function runHtml(args: string[]) {
