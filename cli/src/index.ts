@@ -12,6 +12,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import * as readline from 'readline';
 import {generateHtmlReport} from './output/report_template';
 import {findRevision, git_blame_porcelain, git_ls_files} from "./git";
 import {AsyncGeneratorUtil, stream, streamOf} from "./util/AsyncGeneratorUtil";
@@ -52,6 +53,7 @@ async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto
                 cluster: cluster.path
             }))
         );
+
     for (let i = filesShuffled.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [filesShuffled[i], filesShuffled[j]] = [filesShuffled[j], filesShuffled[i]];
@@ -64,7 +66,7 @@ async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto
         progress?.setMessage("File", currentFile.file)
 
         yield {
-            repo: absoluteRepoPath,
+            repo: path.basename(absoluteRepoPath),
             file: currentFile.file,
             rev: revisionBoundary,
             cluster: currentFile.cluster
@@ -107,7 +109,7 @@ async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: str
     return result;
 }
 
-function runScan1(args: string[]): AsyncGenerator<[any, number]> {
+export function runScan1(args: string[]): AsyncGenerator<[any, number]> {
     const inputPaths = (args && args.length > 0) ? args : ['.'];
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
 
@@ -163,6 +165,44 @@ async function runHtml(args: string[]) {
     console.error(`HTML report generated: ${absoluteOutHtml}`);
 }
 
+async function* forEachStdinLine(consumer: (line: string) => void) {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: false
+    });
+
+    for await (const line of rl) {
+        if (!line.trim()) continue;
+        try {
+            consumer(line)
+        } catch (error) {
+            console.error(`Error parsing line: ${line}`, error);
+        }
+    }
+
+    yield null;
+}
+
+async function runSlice(args: string[]) {
+    let cols = args.map(it => parseInt(it));
+    let result: any = {}
+    await forEachStdinLine(it => {
+        const data = JSON.parse(it);
+        console.log(data)
+        let n = result
+        for (let col of cols) {
+            n[data[col]] = n?.[data[col]] ?? {}
+            n = n[data[col]]
+            n.count = (n?.count ?? 0) + data[data.length-1]
+            n.values = n?.values ?? {}
+            n = n.values
+        }
+    }).next();
+
+    console.log(JSON.stringify(result, null, 2));
+}
+
 // --- Main Application Controller ---
 async function main() {
     const argv = process.argv.slice(2);
@@ -186,6 +226,11 @@ async function main() {
 
     if (subcommand === 'html') {
         await runHtml(argv.slice(1));
+        return;
+    }
+    
+    if (subcommand === "slice") {
+        await runSlice(argv.slice(1));
         return;
     }
 

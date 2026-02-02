@@ -179,7 +179,7 @@ export async function findRevision(repoRoot: string, commitsBack: number): Promi
     return undefined;
 }
 
-export async function git_ls_files(repoRootPath: string, subdirPath: string) {
+export async function git_ls_files(repoRootPath: string, subdirPath: string): Promise<string[]> {
     const {stdout: lsFilesOut} = await execAsync(
         'git',
         ['ls-files', '--', subdirPath || '.'],
