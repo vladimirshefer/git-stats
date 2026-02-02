@@ -3,3 +3,4 @@
 /**/dist/
 /**/*.iml
 /.git-stats/
+.DS_Store
