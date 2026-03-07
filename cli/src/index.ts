@@ -21,9 +21,12 @@ import {DataRow, Dto} from "./base/types";
 import {distinctCount} from "./util/dataset";
 import {getRepoPathsToProcess} from "./discovery";
 import {Progress} from "./progress";
+import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
 
 let sigintCaught = false;
-let progress: Progress | null = null;
+export let progress: Progress | null = null;
+
+export let dataDir: VirtualFileSystem = new RealFileSystemImpl("./.git-stats")
 
 async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto> {
     console.error(`\nProcessing repository: ${repoRelativePath || '.'}`);
@@ -109,9 +112,11 @@ async function doProcessFile(absoluteRepoRoot: string, repoRelativeFilePath: str
     return result;
 }
 
-export function runScan1(args: string[]): AsyncGenerator<[any, number]> {
+export async function runScan1(args: string[]): Promise<AsyncGenerator<[any, number]>> {
     const inputPaths = (args && args.length > 0) ? args : ['.'];
     let repoPathsToProcess = getRepoPathsToProcess(inputPaths);
+
+    await dataDir.write("known_repositories.txt", repoPathsToProcess.join("\n") + "\n")
 
     let dataSet = streamOf(AsyncGeneratorUtil.of(repoPathsToProcess))
         .flatMap(repoRelativePath => getRepositoryFiles(repoRelativePath))
@@ -123,6 +128,7 @@ export function runScan1(args: string[]): AsyncGenerator<[any, number]> {
 }
 
 async function runScan(args: string[]) {
+    let [keys, paths] = extractArgKeys(args)
     progress = new Progress();
     progress.showProgress(300);
 
@@ -135,11 +141,15 @@ async function runScan(args: string[]) {
         console.error("\nSignal received. Finishing current file then stopping. Press Ctrl+C again to exit immediately.");
     });
 
-    let aggregatedData1 = runScan1(args);
+    let aggregatedData1 = await runScan1(paths);
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
-    progress?.destroy()
-    aggregatedData.forEach(it => console.log(JSON.stringify(it)));
+    progress.destroy();
+    if (keys.includes("stdout")) {
+        aggregatedData.forEach(it => console.log(JSON.stringify(it)));
+    } else {
+        aggregatedData.forEach(it => dataDir.append("data.jsonl", JSON.stringify(it) + "\n"));
+    }
 }
 
 async function runHtml(args: string[]) {
@@ -203,6 +213,20 @@ async function runSlice(args: string[]) {
     console.log(JSON.stringify(result, null, 2));
 }
 
+function extractArgKeys(args: string[]): [string[], string[]] {
+    const keys: string[] = [];
+    const values: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg.startsWith('--')) {
+            keys.push(arg.substring(2));
+        } else {
+            values.push(arg);
+        }
+    }
+    return [keys, values];
+}
+
 // --- Main Application Controller ---
 async function main() {
     const argv = process.argv.slice(2);
@@ -228,7 +252,7 @@ async function main() {
         await runHtml(argv.slice(1));
         return;
     }
-    
+
     if (subcommand === "slice") {
         await runSlice(argv.slice(1));
         return;
