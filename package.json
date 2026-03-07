@@ -7,7 +7,6 @@
   ],
   "scripts": {
     "build": "npm run build -ws",
-    "build:order": "npm run build -w html-ui && npm run build -w @vladimirshefer/git-stats",
     "test": "npm test -ws",
     "ci": "npm ci --workspaces"
   },
