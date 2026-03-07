@@ -9,11 +9,11 @@
     "build": "npm run build:js && npm run build:css && npm run build:html"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "^4.1.0",
     "plotly.js": "3.3.0",
     "@types/plotly.js": "2.35.13",
     "esbuild": "0.25.2",
-    "tailwindcss": "^4.1.0"
+    "tailwindcss": "^4.1.0",
+    "@tailwindcss/cli": "^4.1.0"
   },
   "dependencies": {
     "preact": "^10.22.0"
