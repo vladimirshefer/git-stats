@@ -1,0 +1,22 @@
+name: Master Version Tag
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  patch-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required to see all tags and history
+
+      - name: Bump version and push tag
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WITH_V: true
