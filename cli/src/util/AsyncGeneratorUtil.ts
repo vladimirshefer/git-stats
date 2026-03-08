@@ -126,7 +126,4 @@ export namespace stream {
         }
         return streamOf(__ofArrayPromise(p))
     }
-
-
-
 }

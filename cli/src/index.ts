@@ -127,142 +127,145 @@ export async function runScan1(args: string[]): Promise<AsyncGenerator<[any, num
     return distinctCount(dataSet);
 }
 
-async function runScan(args: string[]) {
-    let [keys, paths] = extractArgKeys(args)
+namespace Cli {
+    async function runScan(args: string[]) {
+        let [keys, paths] = extractArgKeys(args)
 
-    process.on('SIGINT', () => {
-        if (sigintCaught) {
-            console.error("\nForcing exit.");
-            process.exit(130);
-        }
-        sigintCaught = true;
-        console.error("\nSignal received. Finishing current file then stopping. Press Ctrl+C again to exit immediately.");
-    });
+        process.on('SIGINT', () => {
+            if (sigintCaught) {
+                console.error("\nForcing exit.");
+                process.exit(130);
+            }
+            sigintCaught = true;
+            console.error("\nSignal received. Finishing current file then stopping. Press Ctrl+C again to exit immediately.");
+        });
 
-    let aggregatedData1 = await runScan1(paths);
-    let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
+        let aggregatedData1 = await runScan1(paths);
+        let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
-    if (keys.includes("stdout")) {
-        aggregatedData.forEach(it => console.log(JSON.stringify(it)));
-    } else {
-        aggregatedData.forEach(it => dataDir.append("data.jsonl", JSON.stringify(it) + "\n"));
-    }
-}
-
-async function runHtml(args: string[]) {
-    const absoluteInputPath = args[0] || path.resolve('./.git-stats/data.jsonl');
-    const absoluteOutHtml = path.resolve('./.git-stats/report.html');
-
-    if (!fs.existsSync(absoluteInputPath)) {
-        console.error(`Input data file not found: ${absoluteInputPath}`);
-        process.exitCode = 1;
-        return;
-    }
-
-    const lines = fs.readFileSync(absoluteInputPath, 'utf8').split(/\r?\n/).filter(Boolean);
-    const aggregatedData = lines.map(line => {
-        try {
-            return JSON.parse(line);
-        } catch {
-            return null;
-        }
-    }).filter(Boolean) as DataRow[];
-
-    generateHtmlReport(aggregatedData, absoluteOutHtml);
-    console.error(`HTML report generated: ${absoluteOutHtml}`);
-}
-
-async function* forEachStdinLine(consumer: (line: string) => void) {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        terminal: false
-    });
-
-    for await (const line of rl) {
-        if (!line.trim()) continue;
-        try {
-            consumer(line)
-        } catch (error) {
-            console.error(`Error parsing line: ${line}`, error);
-        }
-    }
-
-    yield null;
-}
-
-async function runSlice(args: string[]) {
-    let cols = args.map(it => parseInt(it));
-    let result: any = {}
-    await forEachStdinLine(it => {
-        const data = JSON.parse(it);
-        console.log(data)
-        let n = result
-        for (let col of cols) {
-            n[data[col]] = n?.[data[col]] ?? {}
-            n = n[data[col]]
-            n.count = (n?.count ?? 0) + data[data.length-1]
-            n.values = n?.values ?? {}
-            n = n.values
-        }
-    }).next();
-
-    console.log(JSON.stringify(result, null, 2));
-}
-
-function extractArgKeys(args: string[]): [string[], string[]] {
-    const keys: string[] = [];
-    const values: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
-        if (arg.startsWith('--')) {
-            keys.push(arg.substring(2));
+        if (keys.includes("stdout")) {
+            aggregatedData.forEach(it => console.log(JSON.stringify(it)));
         } else {
-            values.push(arg);
-        }
-    }
-    return [keys, values];
-}
-
-// --- Main Application Controller ---
-async function main() {
-    progress.showProgress(300);
-    const argv = process.argv.slice(2);
-    let subcommand = argv[0];
-
-    let subcommandsMenu = {
-        "html": {
-            description: "Generates an HTML report from the aggregated data.",
-            usage: "git-stats html [input-data-file]"
-        },
-        "scan": {
-            description: "Scans a directory tree for Git repositories and generates aggregated data.",
-            usage: "git-stats scan [input-dir] > {output-file}.jsonl"
+            aggregatedData.forEach(it => dataDir.append("data.jsonl", JSON.stringify(it) + "\n"));
         }
     }
 
-    if (subcommand === 'scan') {
-        await runScan(argv.slice(1));
-        return;
+    async function runHtml(args: string[]) {
+        const absoluteInputPath = args[0] || path.resolve('./.git-stats/data.jsonl');
+        const absoluteOutHtml = path.resolve('./.git-stats/report.html');
+
+        if (!fs.existsSync(absoluteInputPath)) {
+            console.error(`Input data file not found: ${absoluteInputPath}`);
+            process.exitCode = 1;
+            return;
+        }
+
+        const lines = fs.readFileSync(absoluteInputPath, 'utf8').split(/\r?\n/).filter(Boolean);
+        const aggregatedData = lines.map(line => {
+            try {
+                return JSON.parse(line);
+            } catch {
+                return null;
+            }
+        }).filter(Boolean) as DataRow[];
+
+        generateHtmlReport(aggregatedData, absoluteOutHtml);
+        console.error(`HTML report generated: ${absoluteOutHtml}`);
     }
 
-    if (subcommand === 'html') {
-        await runHtml(argv.slice(1));
-        return;
+    async function* forEachStdinLine(consumer: (line: string) => void) {
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+            terminal: false
+        });
+
+        for await (const line of rl) {
+            if (!line.trim()) continue;
+            try {
+                consumer(line)
+            } catch (error) {
+                console.error(`Error parsing line: ${line}`, error);
+            }
+        }
+
+        yield null;
     }
 
-    if (subcommand === "slice") {
-        await runSlice(argv.slice(1));
-        return;
+    async function runSlice(args: string[]) {
+        let cols = args.map(it => parseInt(it));
+        let result: any = {}
+        await forEachStdinLine(it => {
+            const data = JSON.parse(it);
+            console.log(data)
+            let n = result
+            for (let col of cols) {
+                n[data[col]] = n?.[data[col]] ?? {}
+                n = n[data[col]]
+                n.count = (n?.count ?? 0) + data[data.length-1]
+                n.values = n?.values ?? {}
+                n = n.values
+            }
+        }).next();
+
+        console.log(JSON.stringify(result, null, 2));
     }
 
-    console.error(`Usage: git-stats <subcommand> [args]\n\nAvailable subcommands:`);
-    for (const [name, {description, usage}] of Object.entries(subcommandsMenu)) {
-        console.error(`- ${name}: ${description}\n    Usage: ${usage}`);
+    function extractArgKeys(args: string[]): [string[], string[]] {
+        const keys: string[] = [];
+        const values: string[] = [];
+        for (let i = 0; i < args.length; i++) {
+            const arg = args[i];
+            if (arg.startsWith('--')) {
+                keys.push(arg.substring(2));
+            } else {
+                values.push(arg);
+            }
+        }
+        return [keys, values];
     }
 
-    progress.reset();
+    // --- Main Application Controller ---
+    export async function main() {
+        progress.showProgress(300);
+        const argv = process.argv.slice(2);
+        let subcommand = argv[0];
+
+        let subcommandsMenu = {
+            "html": {
+                description: "Generates an HTML report from the aggregated data.",
+                usage: "git-stats html [input-data-file]"
+            },
+            "scan": {
+                description: "Scans a directory tree for Git repositories and generates aggregated data.",
+                usage: "git-stats scan [input-dir] > {output-file}.jsonl"
+            }
+        }
+
+        if (subcommand === 'scan') {
+            await runScan(argv.slice(1));
+            return;
+        }
+
+        if (subcommand === 'html') {
+            await runHtml(argv.slice(1));
+            return;
+        }
+
+        if (subcommand === "slice") {
+            await runSlice(argv.slice(1));
+            return;
+        }
+
+        console.error(`Usage: git-stats <subcommand> [args]\n\nAvailable subcommands:`);
+        for (const [name, {description, usage}] of Object.entries(subcommandsMenu)) {
+            console.error(`- ${name}: ${description}\n    Usage: ${usage}`);
+        }
+
+        progress.reset();
+    }
+
 }
 
 // --- Entry Point ---
-main().catch(console.error);
+Cli.main().catch(console.error);
