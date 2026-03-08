@@ -1,68 +1,71 @@
 import * as process from "node:process";
 
-export class Progress {
+export namespace Progress {
+    class Progress {
+        progress: Record<string, [number, number | undefined]> = {};
+        messages: Record<string, string> = {};
+        startTime: Record<string, number> = {};
 
-    progress: Record<string, [number, number | undefined]> = {};
-    messages: Record<string, string> = {};
-    startTime: Record<string, number> = {};
+        setProgress(name: string, current: number, max: number | undefined = undefined) {
+            this.progress[name] = [current, max ?? this.progress[name]?.[1] ?? undefined];
+            if (!this.startTime[name]) this.startTime[name] = Date.now();
+        }
 
-    setProgress(name: string, current: number, max: number | undefined = undefined) {
-        this.progress[name] = [current, max ?? this.progress[name]?.[1] ?? undefined];
-        if (!this.startTime[name]) this.startTime[name] = Date.now();
+        setMessage(name: string, message: string) {
+            this.messages[name] = message;
+        }
+
+        stop(name: string) {
+            delete this.progress[name];
+            delete this.messages[name];
+            delete this.startTime[name];
+        }
+
+        reset() {
+            Object.keys(this.progress).forEach(key => this.stop(key));
+            clearInterval(this.currentInterval);
+        }
+
+        currentInterval: any | undefined = undefined;
+
+        showProgress(period: number) {
+            this.currentInterval = setInterval(() => {
+                // collect the progess "Progress: key1: [value/max], key2: [value/max], ..."
+                const now = Date.now();
+                const progress = Object.entries(this.progress).map(([key, [value, max]]) => {
+                    let eta = "?";
+                    const startTime = this.startTime[key];
+                    if (startTime && max !== undefined) {
+                        const elapsed = (now - startTime) / 1000;
+                        const rate = value / elapsed;
+                        const remaining = max - value;
+                        const etaSeconds = Math.round(remaining / rate);
+
+                        const days = Math.floor(etaSeconds / 86400);
+                        const hours = Math.floor((etaSeconds % 86400) / 3600);
+                        const minutes = Math.floor((etaSeconds % 3600) / 60);
+                        const seconds = etaSeconds % 60;
+
+                        const parts: string[] = [];
+                        if (days > 0) parts.push(`${days}d`);
+                        if (hours > 0) parts.push(`${hours}h`);
+                        if (minutes > 0) parts.push(`${minutes}m`);
+                        if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+
+                        eta = ` ETA: ${parts.join('')}`;
+                    }
+                    return `${key}: [${value}/${max ?? "?"}]${eta} ${this.messages[key] ?? ""}`;
+                }).join(", ");
+                if (progress.length === 0) return;
+                // reset the last error log line
+                process.stderr.clearLine(0, () => {
+                    process.stderr.write("\r"+progress);
+                })
+
+            }, period);
+        }
+
     }
 
-    setMessage(name: string, message: string) {
-        this.messages[name] = message;
-    }
-
-    stop(name: string) {
-        delete this.progress[name];
-        delete this.messages[name];
-        delete this.startTime[name];
-    }
-
-    destroy() {
-        Object.keys(this.progress).forEach(key => this.stop(key));
-        clearInterval(this.currentInterval);
-    }
-
-    currentInterval: any | undefined = undefined;
-
-    showProgress(period: number) {
-        this.currentInterval = setInterval(() => {
-            // collect the progess "Progress: key1: [value/max], key2: [value/max], ..."
-            const now = Date.now();
-            const progress = Object.entries(this.progress).map(([key, [value, max]]) => {
-                let eta = "?";
-                const startTime = this.startTime[key];
-                if (startTime && max !== undefined) {
-                    const elapsed = (now - startTime) / 1000;
-                    const rate = value / elapsed;
-                    const remaining = max - value;
-                    const etaSeconds = Math.round(remaining / rate);
-
-                    const days = Math.floor(etaSeconds / 86400);
-                    const hours = Math.floor((etaSeconds % 86400) / 3600);
-                    const minutes = Math.floor((etaSeconds % 3600) / 60);
-                    const seconds = etaSeconds % 60;
-
-                    const parts: string[] = [];
-                    if (days > 0) parts.push(`${days}d`);
-                    if (hours > 0) parts.push(`${hours}h`);
-                    if (minutes > 0) parts.push(`${minutes}m`);
-                    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
-
-                    eta = ` ETA: ${parts.join('')}`;
-                }
-                return `${key}: [${value}/${max ?? "?"}]${eta} ${this.messages[key] ?? ""}`;
-            }).join(", ");
-            if (progress.length === 0) return;
-            // reset the last error log line
-            process.stderr.clearLine(0, () => {
-                process.stderr.write("\r"+progress);
-            })
-
-        }, period);
-    }
-
+    export const progress = new Progress();
 }

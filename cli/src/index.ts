@@ -24,7 +24,7 @@ import {Progress} from "./progress";
 import {RealFileSystemImpl, VirtualFileSystem} from "./vfs";
 
 let sigintCaught = false;
-export let progress: Progress | null = null;
+export let progress = Progress.progress
 
 export let dataDir: VirtualFileSystem = new RealFileSystemImpl("./.git-stats")
 
@@ -65,8 +65,8 @@ async function* getRepositoryFiles(repoRelativePath: string): AsyncGenerator<Dto
     for (let i = 0; i < filesShuffled.length; i++) {
         if (sigintCaught) break;
         const currentFile = filesShuffled[i];
-        progress?.setProgress("File", i + 1, files.length)
-        progress?.setMessage("File", currentFile.file)
+        progress.setProgress("File", i + 1, files.length)
+        progress.setMessage("File", currentFile.file)
 
         yield {
             repo: path.basename(absoluteRepoPath),
@@ -129,8 +129,6 @@ export async function runScan1(args: string[]): Promise<AsyncGenerator<[any, num
 
 async function runScan(args: string[]) {
     let [keys, paths] = extractArgKeys(args)
-    progress = new Progress();
-    progress.showProgress(300);
 
     process.on('SIGINT', () => {
         if (sigintCaught) {
@@ -144,7 +142,6 @@ async function runScan(args: string[]) {
     let aggregatedData1 = await runScan1(paths);
     let aggregatedData = await AsyncGeneratorUtil.collect(aggregatedData1);
 
-    progress.destroy();
     if (keys.includes("stdout")) {
         aggregatedData.forEach(it => console.log(JSON.stringify(it)));
     } else {
@@ -229,6 +226,7 @@ function extractArgKeys(args: string[]): [string[], string[]] {
 
 // --- Main Application Controller ---
 async function main() {
+    progress.showProgress(300);
     const argv = process.argv.slice(2);
     let subcommand = argv[0];
 
@@ -262,6 +260,8 @@ async function main() {
     for (const [name, {description, usage}] of Object.entries(subcommandsMenu)) {
         console.error(`- ${name}: ${description}\n    Usage: ${usage}`);
     }
+
+    progress.reset();
 }
 
 // --- Entry Point ---
