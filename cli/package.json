@@ -1,6 +1,6 @@
 {
   "name": "@vladimirshefer/git-stats",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "A CLI to generate git blame stats for a repository",
   "main": "dist/index.js",
   "bin": {
