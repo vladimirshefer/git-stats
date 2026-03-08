@@ -42,4 +42,4 @@ jobs:
             echo "NPM_TOKEN is not set. Please add it in the repository secrets." >&2
             exit 1
           fi
-          npm publish --access public
+          npm publish -ws --access public
