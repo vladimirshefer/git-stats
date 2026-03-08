@@ -1,20 +1,23 @@
 rebuild: clear ## Rebuild the project from scratch
 	npm install
 	npm run build
-	npm --prefix cli install -g
 
 build: ## Build the poject
-	npm ci --workspaces
+	npm ci
 	npm run build
 
 test: ## Run tests
-	npm test --workspaces
+	npm test
 
 clear: ## Reset the project, remove all artifacts
+	rm -rf ./node_modules
+	rm -f ./package-lock.json
 	rm -rf ./cli/node_modules
 	rm -rf ./cli/dist
+	rm -f ./cli/package-lock.json
 	rm -rf ./html-ui/node_modules
 	rm -rf ./html-ui/dist
+	rm -f ./html-ui/package-lock.json
 
 install: build ## Install the cli to the terminal
 	npm --prefix cli install -g
